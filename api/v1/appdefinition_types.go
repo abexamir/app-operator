@@ -147,6 +147,8 @@ type LifecycleSpec struct {
 	PreStop   *LifecycleHook `json:"preStop,omitempty"`
 }
 
+// +kubebuilder:validation:XValidation:rule="!has(self.disk) || !has(self.replicas) || self.replicas <= 1",message="stateful apps with persistent disk cannot have more than 1 replica; multiple instances would corrupt the shared TSDB/volume"
+// +kubebuilder:validation:XValidation:rule="!has(self.autoscaling) || !self.autoscaling.enabled || !has(self.disk)",message="autoscaling cannot be enabled on stateful apps with persistent disk"
 type AppDefinitionSpec struct {
 	// Containers defines the application containers to run.
 	Containers         []ContainerSpec            `json:"containers"`
