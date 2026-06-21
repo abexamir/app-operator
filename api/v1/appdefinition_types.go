@@ -85,27 +85,41 @@ type DockerImageSource struct {
 	Containers []ContainerSpec `json:"containers"`
 }
 
-// type GitRepoSource struct {
-// 	URL          string `json:"url"`
-// 	Branch       string `json:"branch,omitempty"`
-// 	BuildContext string `json:"buildContext,omitempty"`
-// 	Dockerfile   string `json:"dockerfile,omitempty"`
-// }
-
-// +kubebuilder:pruning:PreserveUnknownFields
-// type HelmChartSource struct {
-// 	Repo    string                          `json:"repo"`
-// 	Name    string                          `json:"name"`
-// 	Version string                          `json:"version,omitempty"`
-// 	Values  map[string]apiextensionsv1.JSON `json:"values,omitempty"`
-// }
-
 type SourceSpec struct {
 	// +kubebuilder:validation:Enum=dockerImage
 	Type        string             `json:"type"` // Only dockerImage for now
 	DockerImage *DockerImageSource `json:"dockerImage,omitempty"`
-	// GitRepo     *GitRepoSource     `json:"gitRepo,omitempty"`
-	// HelmChart   *HelmChartSource   `json:"helmChart,omitempty"`
+}
+
+// ---------------------------------------
+// Autoscaling
+// ---------------------------------------
+
+// AutoscalingSpec configures a HorizontalPodAutoscaler for the AppDefinition.
+type AutoscalingSpec struct {
+	Enabled                           bool   `json:"enabled"`
+	MinReplicas                       *int32 `json:"minReplicas,omitempty"`
+	MaxReplicas                       int32  `json:"maxReplicas"`
+	TargetCPUUtilizationPercentage    *int32 `json:"targetCPUUtilizationPercentage,omitempty"`
+	TargetMemoryUtilizationPercentage *int32 `json:"targetMemoryUtilizationPercentage,omitempty"`
+}
+
+// ---------------------------------------
+// Volume mounts
+// ---------------------------------------
+
+// ConfigMapMount mounts a ConfigMap as a directory into all containers.
+type ConfigMapMount struct {
+	Name      string `json:"name"`
+	MountPath string `json:"mountPath"`
+	Optional  bool   `json:"optional,omitempty"`
+}
+
+// SecretMount mounts a Secret as a directory into all containers.
+type SecretMount struct {
+	Name      string `json:"name"`
+	MountPath string `json:"mountPath"`
+	Optional  bool   `json:"optional,omitempty"`
 }
 
 // ---------------------------------------
@@ -119,6 +133,10 @@ type DomainSpec struct {
 	CertIssuer  string            `json:"certIssuer,omitempty"`
 	Path        string            `json:"path,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
+	// PortName is the service port name to route traffic to. Defaults to "http".
+	PortName string `json:"portName,omitempty"`
+	// SecretName is the TLS secret name. Auto-generated as <app>-<domain>-tls if not set.
+	SecretName string `json:"secretName,omitempty"`
 }
 
 type LifecycleHook struct {
@@ -145,24 +163,58 @@ type AppDefinitionSpec struct {
 	NodeSelector       map[string]string          `json:"nodeSelector,omitempty"`
 	Tolerations        []corev1.Toleration        `json:"tolerations,omitempty"`
 	Affinity           *corev1.Affinity           `json:"affinity,omitempty"`
+	// Paused suspends reconciliation when true. Existing resources are left unchanged.
+	Paused bool `json:"paused,omitempty"`
+	// Autoscaling configures an HPA. When enabled, the replicas field sets minReplicas.
+	Autoscaling *AutoscalingSpec `json:"autoscaling,omitempty"`
+	// ImagePullSecrets are references to secrets in the same namespace for pulling container images.
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+	// ConfigMaps to mount as directories into all containers.
+	ConfigMaps []ConfigMapMount `json:"configMaps,omitempty"`
+	// Secrets to mount as directories into all containers.
+	Secrets []SecretMount `json:"secrets,omitempty"`
 }
 
-func (in *AppDefinitionSpec) DeepCopyInto(out *AppDefinitionSpec) {
-	*out = *in
+// ---------------------------------------
+// Status
+// ---------------------------------------
+
+const (
+	ConditionTypeReady       = "Ready"
+	ConditionTypeProgressing = "Progressing"
+)
+
+type AppDefinitionStatus struct {
+	// Phase is a high-level summary of the AppDefinition state: Available, Progressing, Failed, or Paused.
+	Phase string `json:"phase,omitempty"`
+	// ReadyReplicas is the number of pods targeted by this AppDefinition with a Ready condition.
+	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
+	// Replicas is the desired number of replicas.
+	Replicas int32 `json:"replicas,omitempty"`
+	// ObservedGeneration is the most recent generation observed.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Conditions represent the latest available observations of the AppDefinition's state.
+	// +patchMergeKey=type
+	// +patchStrategy=merge
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// LastError holds the last reconciliation error message.
+	LastError string `json:"lastError,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="Ready",type="integer",JSONPath=".status.readyReplicas"
+// +kubebuilder:printcolumn:name="Replicas",type="integer",JSONPath=".status.replicas"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 type AppDefinition struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	Spec   AppDefinitionSpec   `json:"spec,omitempty"`
 	Status AppDefinitionStatus `json:"status,omitempty"`
-}
-
-type AppDefinitionStatus struct {
-	// Add observed state here (optional)
 }
 
 // +kubebuilder:object:root=true
