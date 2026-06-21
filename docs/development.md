@@ -84,13 +84,13 @@ AppDefinitionReconciler  (internal/controller/appdefinition_controller.go)
        │
        ├── reconcileConfigMaps()     → ConfigMap   (one per configMaps[], named <app>-<name>)
        ├── reconcileSecrets()        → Secret      (one per secrets[], named <app>-<name>)
-       ├── reconcileDeployment()     → Deployment  (containers, volumes, probes, lifecycle, scheduling)
+       ├── reconcileDeployment()     → Deployment  (init containers, containers, volumes, probes, lifecycle, config-hash annotation, scheduling)
        ├── reconcileService()        → Service     (expose:true ports; serviceType)
-       ├── reconcilePVC()            → PVC         (creation-only; immutable after)
+       ├── reconcilePVC()            → PVC         (create; expand if sizeInGi increases)
        ├── reconcileIngress()        → Ingress     (per-domain rules and TLS blocks)
        ├── reconcileHPA()            → HPA         (created/deleted based on autoscaling.enabled)
        ├── reconcileServiceMonitor() → ServiceMonitor (skipped gracefully when CRD absent)
-       └── updateStatus()            → status subresource (phase, readyReplicas, conditions)
+       └── updateStatus()            → status subresource (phase, readyReplicas, Ready/DiskReady/IngressReady/HPAActive conditions)
 ```
 
 Reconciliation order is intentional: ConfigMaps and Secrets are created before the Deployment so all mounts are available when pods start.
@@ -151,7 +151,7 @@ Generated from `// +kubebuilder:rbac:...` markers in `appdefinition_controller.g
 
 - **Secrets in plain text**: `secrets[].data` is stored unencrypted in the AppDefinition spec and in etcd. For production, use [External Secrets Operator](https://external-secrets.io) or [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) to manage values externally and reference them.
 
-- **PVC is immutable**: storage size cannot be changed after creation. Kubernetes does not allow shrinking a PVC, and the operator skips the spec on updates to avoid conflicts. To resize: delete the AppDefinition (which deletes the PVC) and recreate with the new size.
+- **PVC shrink is not supported**: the operator will expand the PVC when `disk.sizeInGi` increases (the storage class must have `allowVolumeExpansion: true`), but shrinking is rejected by Kubernetes. To downsize: delete the AppDefinition (which deletes the PVC) and recreate with the smaller size.
 
 - **Single PVC across all containers**: every container in the pod mounts the same disk at every declared partition. There is no per-container disk assignment.
 
@@ -167,8 +167,6 @@ Generated from `// +kubebuilder:rbac:...` markers in `appdefinition_controller.g
 
 ## Potential Improvements
 
-- **Init containers**: very common for DB migrations, config rendering, permission setup.
-
 - **Startup probe**: the recommended way to handle slow-starting containers without inflating liveness `initialDelaySeconds`.
 
 - **Container-level security context**: the current `securityContext` is pod-level only. Per-container `runAsUser`, `allowPrivilegeEscalation`, `readOnlyRootFilesystem` cover the most common hardening requirements.
@@ -177,12 +175,6 @@ Generated from `// +kubebuilder:rbac:...` markers in `appdefinition_controller.g
 
 - **PodDisruptionBudget**: automatically create a PDB (`minAvailable: 1`) for apps with `replicas > 1` to prevent outages during node drains.
 
-- **ConfigMap hash rollout**: annotate the Deployment pod template with a hash of ConfigMap/Secret data so changing inline data triggers an automatic rolling restart.
-
-- **PVC expansion**: for storage classes with `allowVolumeExpansion: true`, attempt a resize when `disk.sizeInGi` increases.
-
-- **External Secret references**: alongside inline `data`, allow referencing a pre-existing Secret by name for values managed externally.
-
 - **Stale child cleanup**: track which ConfigMaps and Secrets were last created by the operator (via a hash annotation) and delete those no longer in the spec.
 
 - **Admission webhook**: CEL rules cover basics but a webhook can validate things CEL cannot — image format, port name uniqueness across containers, checking that a referenced StorageClass exists — and return richer errors before any resources are created.
@@ -190,5 +182,3 @@ Generated from `// +kubebuilder:rbac:...` markers in `appdefinition_controller.g
 - **Log shipping integration**: when `loggingConfig` is present, inject a Promtail scrape annotation on the pod, or create an OTel `PodLogs` object targeting it — same unstructured pattern as `ServiceMonitor`.
 
 - **KEDA / custom metrics HPA**: current autoscaling supports CPU and memory only. A `ScaledObject` would allow scaling on Prometheus metrics, queue length, or any external signal.
-
-- **Per-resource status conditions**: `PVCBound`, `IngressReady`, `HPAActive` alongside the top-level phase would make partial failures easier to diagnose without `kubectl describe`.

@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,7 +30,10 @@ import (
 	v1 "github.com/abexamir/app-operator/api/v1"
 )
 
-const finalizer = "appdefinition.abexamir.me/finalizer"
+const (
+	finalizer            = "appdefinition.abexamir.me/finalizer"
+	configHashAnnotation = "appdefinition.abexamir.me/config-hash"
+)
 
 var serviceMonitorGVK = schema.GroupVersionKind{
 	Group:   "monitoring.coreos.com",
@@ -166,7 +171,8 @@ func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDe
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: selectorLabels(appDef.Name),
+					Labels:      selectorLabels(appDef.Name),
+					Annotations: podTemplateAnnotations(appDef),
 				},
 				Spec: corev1.PodSpec{},
 			},
@@ -191,6 +197,7 @@ func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDe
 		}
 
 		podSpec.Volumes = buildVolumes(appDef)
+		podSpec.InitContainers = buildInitContainers(appDef)
 		podSpec.Containers = buildContainers(appDef)
 
 		return ctrl.SetControllerReference(appDef, deployment, r.Scheme)
@@ -203,6 +210,68 @@ func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDe
 		logger.Info("Deployment reconciled", "operation", op)
 	}
 	return nil
+}
+
+// podTemplateAnnotations returns annotations for the pod template.
+// The config hash annotation triggers a rolling restart when inline ConfigMap or Secret data changes.
+func podTemplateAnnotations(appDef *v1.AppDefinition) map[string]string {
+	hash := computeConfigHash(appDef)
+	if hash == "" {
+		return nil
+	}
+	return map[string]string{configHashAnnotation: hash}
+}
+
+// computeConfigHash returns a 16-char hex hash of all inline ConfigMap and Secret data.
+// Returns empty string when there is no inline data to hash.
+func computeConfigHash(appDef *v1.AppDefinition) string {
+	hasInlineData := false
+	for _, sec := range appDef.Spec.Secrets {
+		if len(sec.Data) > 0 {
+			hasInlineData = true
+			break
+		}
+	}
+	if len(appDef.Spec.ConfigMaps) == 0 && !hasInlineData {
+		return ""
+	}
+
+	h := sha256.New()
+
+	cms := make([]v1.ConfigMapMount, len(appDef.Spec.ConfigMaps))
+	copy(cms, appDef.Spec.ConfigMaps)
+	sort.Slice(cms, func(i, j int) bool { return cms[i].Name < cms[j].Name })
+	for _, cm := range cms {
+		keys := make([]string, 0, len(cm.Data))
+		for k := range cm.Data {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		fmt.Fprintf(h, "cm:%s\n", cm.Name)
+		for _, k := range keys {
+			fmt.Fprintf(h, "%s=%s\n", k, cm.Data[k])
+		}
+	}
+
+	secs := make([]v1.SecretMount, len(appDef.Spec.Secrets))
+	copy(secs, appDef.Spec.Secrets)
+	sort.Slice(secs, func(i, j int) bool { return secs[i].Name < secs[j].Name })
+	for _, sec := range secs {
+		if len(sec.Data) == 0 {
+			continue
+		}
+		keys := make([]string, 0, len(sec.Data))
+		for k := range sec.Data {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		fmt.Fprintf(h, "secret:%s\n", sec.Name)
+		for _, k := range keys {
+			fmt.Fprintf(h, "%s=%s\n", k, sec.Data[k])
+		}
+	}
+
+	return fmt.Sprintf("%x", h.Sum(nil))[:16]
 }
 
 func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
@@ -228,7 +297,6 @@ func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
 		})
 	}
 
-	// Inline ConfigMaps: always mounted as a directory.
 	for _, cm := range appDef.Spec.ConfigMaps {
 		volumes = append(volumes, corev1.Volume{
 			Name: "cm-" + cm.Name,
@@ -242,7 +310,6 @@ func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
 		})
 	}
 
-	// Inline Secrets: volume only created when MountPath is set.
 	for _, sec := range appDef.Spec.Secrets {
 		if sec.MountPath == "" {
 			continue
@@ -251,13 +318,53 @@ func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
 			Name: "secret-" + sec.Name,
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: appDef.Name + "-" + sec.Name,
+					SecretName: resolvedSecretName(appDef.Name, sec),
 				},
 			},
 		})
 	}
 
 	return volumes
+}
+
+// buildVolumeMounts returns the volume mounts shared by all containers (main and init).
+func buildVolumeMounts(appDef *v1.AppDefinition) []corev1.VolumeMount {
+	mountCount := len(appDef.Spec.ConfigMaps)
+	if appDef.Spec.Disk != nil {
+		mountCount += len(appDef.Spec.Disk.Partitions)
+	}
+	for _, sec := range appDef.Spec.Secrets {
+		if sec.MountPath != "" {
+			mountCount++
+		}
+	}
+	mounts := make([]corev1.VolumeMount, 0, mountCount)
+
+	if appDef.Spec.Disk != nil {
+		for _, p := range appDef.Spec.Disk.Partitions {
+			mounts = append(mounts, corev1.VolumeMount{
+				Name:      "app-disk",
+				MountPath: p.MountPath,
+				SubPath:   p.SubPath,
+			})
+		}
+	}
+	for _, cm := range appDef.Spec.ConfigMaps {
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      "cm-" + cm.Name,
+			MountPath: cm.MountPath,
+		})
+	}
+	for _, sec := range appDef.Spec.Secrets {
+		if sec.MountPath == "" {
+			continue
+		}
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      "secret-" + sec.Name,
+			MountPath: sec.MountPath,
+		})
+	}
+	return mounts
 }
 
 func buildContainers(appDef *v1.AppDefinition) []corev1.Container {
@@ -325,50 +432,51 @@ func buildContainer(appDef *v1.AppDefinition, c v1.ContainerSpec, isPrimary bool
 		container.EnvFrom = append(container.EnvFrom, corev1.EnvFromSource{
 			SecretRef: &corev1.SecretEnvSource{
 				LocalObjectReference: corev1.LocalObjectReference{
-					Name: appDef.Name + "-" + sec.Name,
+					Name: resolvedSecretName(appDef.Name, sec),
 				},
 			},
 		})
 	}
 
-	// Volume mounts: disk partitions, configmaps, secrets (only those with MountPath).
-	mountCount := len(appDef.Spec.ConfigMaps)
-	if appDef.Spec.Disk != nil {
-		mountCount += len(appDef.Spec.Disk.Partitions)
+	container.VolumeMounts = buildVolumeMounts(appDef)
+	return container
+}
+
+// buildInitContainers builds corev1.Containers for all initContainers in the spec.
+// Init containers share the same volumes, secret env injection, and mounts as main containers
+// but do not have ports or lifecycle hooks.
+func buildInitContainers(appDef *v1.AppDefinition) []corev1.Container {
+	if len(appDef.Spec.InitContainers) == 0 {
+		return nil
 	}
-	for _, sec := range appDef.Spec.Secrets {
-		if sec.MountPath != "" {
-			mountCount++
+	containers := make([]corev1.Container, 0, len(appDef.Spec.InitContainers))
+	for _, c := range appDef.Spec.InitContainers {
+		container := corev1.Container{
+			Name:    c.Name,
+			Image:   c.Image,
+			Command: c.Command,
+			Args:    c.Args,
+			Env:     c.Env,
 		}
-	}
-	mounts := make([]corev1.VolumeMount, 0, mountCount)
-	if appDef.Spec.Disk != nil {
-		for _, p := range appDef.Spec.Disk.Partitions {
-			mounts = append(mounts, corev1.VolumeMount{
-				Name:      "app-disk",
-				MountPath: p.MountPath,
-				SubPath:   p.SubPath,
+		if len(c.Resources.Requests) > 0 || len(c.Resources.Limits) > 0 {
+			container.Resources = c.Resources
+		}
+		for _, sec := range appDef.Spec.Secrets {
+			if !sec.AsEnvVars {
+				continue
+			}
+			container.EnvFrom = append(container.EnvFrom, corev1.EnvFromSource{
+				SecretRef: &corev1.SecretEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: resolvedSecretName(appDef.Name, sec),
+					},
+				},
 			})
 		}
+		container.VolumeMounts = buildVolumeMounts(appDef)
+		containers = append(containers, container)
 	}
-	for _, cm := range appDef.Spec.ConfigMaps {
-		mounts = append(mounts, corev1.VolumeMount{
-			Name:      "cm-" + cm.Name,
-			MountPath: cm.MountPath,
-		})
-	}
-	for _, sec := range appDef.Spec.Secrets {
-		if sec.MountPath == "" {
-			continue
-		}
-		mounts = append(mounts, corev1.VolumeMount{
-			Name:      "secret-" + sec.Name,
-			MountPath: sec.MountPath,
-		})
-	}
-	container.VolumeMounts = mounts
-
-	return container
+	return containers
 }
 
 func buildProbe(p *v1.Probe) *corev1.Probe {
@@ -470,12 +578,16 @@ func (r *AppDefinitionReconciler) reconcileConfigMaps(ctx context.Context, appDe
 }
 
 // ----------------------------------------------------------------
-// Inline Secrets
+// Inline and External Secrets
 // ----------------------------------------------------------------
 
 func (r *AppDefinitionReconciler) reconcileSecrets(ctx context.Context, appDef *v1.AppDefinition) error {
 	logger := log.FromContext(ctx)
 	for _, sec := range appDef.Spec.Secrets {
+		// External secrets are referenced, not managed — skip creation.
+		if sec.SecretRef != "" {
+			continue
+		}
 		obj := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      appDef.Name + "-" + sec.Name,
@@ -515,19 +627,26 @@ func (r *AppDefinitionReconciler) reconcilePVC(ctx context.Context, appDef *v1.A
 	op, err := ctrl.CreateOrUpdate(ctx, r.Client, pvc, func() error {
 		pvc.Labels = standardLabels(appDef.Name)
 
-		// PVC storage is immutable after creation; only set spec when creating.
+		requested := resource.MustParse(fmt.Sprintf("%dGi", appDef.Spec.Disk.SizeInGi))
+
 		if pvc.ResourceVersion == "" {
+			// New PVC: set full spec.
 			storageClass := appDef.Spec.Disk.StorageClassName
 			pvc.Spec = corev1.PersistentVolumeClaimSpec{
 				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 				Resources: corev1.VolumeResourceRequirements{
 					Requests: corev1.ResourceList{
-						corev1.ResourceStorage: resource.MustParse(
-							fmt.Sprintf("%dGi", appDef.Spec.Disk.SizeInGi),
-						),
+						corev1.ResourceStorage: requested,
 					},
 				},
 				StorageClassName: &storageClass,
+			}
+		} else {
+			// Existing PVC: attempt expansion if size increased.
+			// Shrinks are rejected by the Kubernetes API; silently ignored here.
+			current := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+			if requested.Cmp(current) > 0 {
+				pvc.Spec.Resources.Requests[corev1.ResourceStorage] = requested
 			}
 		}
 
@@ -765,6 +884,7 @@ func (r *AppDefinitionReconciler) updateStatus(ctx context.Context, appDef *v1.A
 	fresh.Status.ReadyReplicas = readyReplicas
 	fresh.Status.ObservedGeneration = fresh.Generation
 	fresh.Status.LastError = lastError
+
 	apimeta.SetStatusCondition(&fresh.Status.Conditions, metav1.Condition{
 		Type:               v1.ConditionTypeReady,
 		Status:             ready,
@@ -773,6 +893,87 @@ func (r *AppDefinitionReconciler) updateStatus(ctx context.Context, appDef *v1.A
 		LastTransitionTime: now,
 		ObservedGeneration: fresh.Generation,
 	})
+
+	// DiskReady: set when a PVC is declared; reflects PVC phase.
+	if appDef.Spec.Disk != nil {
+		pvc := &corev1.PersistentVolumeClaim{}
+		pvcStatus := metav1.ConditionFalse
+		pvcReason := "Provisioning"
+		pvcMsg := "PVC is being provisioned"
+		if err := r.Get(ctx, types.NamespacedName{Name: pvcName(appDef.Name), Namespace: appDef.Namespace}, pvc); err == nil {
+			if pvc.Status.Phase == corev1.ClaimBound {
+				pvcStatus = metav1.ConditionTrue
+				pvcReason = "Bound"
+				pvcSize := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+				pvcMsg = fmt.Sprintf("PVC %s is bound (%s)", pvcName(appDef.Name), pvcSize.String())
+			} else {
+				pvcMsg = fmt.Sprintf("PVC phase: %s", pvc.Status.Phase)
+			}
+		}
+		apimeta.SetStatusCondition(&fresh.Status.Conditions, metav1.Condition{
+			Type:               v1.ConditionTypeDiskReady,
+			Status:             pvcStatus,
+			Reason:             pvcReason,
+			Message:            pvcMsg,
+			LastTransitionTime: now,
+			ObservedGeneration: fresh.Generation,
+		})
+	}
+
+	// IngressReady: set when domains are declared; reflects whether the ingress controller
+	// has assigned an IP or hostname.
+	if len(appDef.Spec.Domains) > 0 {
+		ingress := &networkingv1.Ingress{}
+		ingressStatus := metav1.ConditionFalse
+		ingressReason := "Pending"
+		ingressMsg := "Ingress controller has not yet assigned an address"
+		if err := r.Get(ctx, types.NamespacedName{Name: appDef.Name, Namespace: appDef.Namespace}, ingress); err == nil {
+			if len(ingress.Status.LoadBalancer.Ingress) > 0 {
+				addrs := make([]string, 0, len(ingress.Status.LoadBalancer.Ingress))
+				for _, lb := range ingress.Status.LoadBalancer.Ingress {
+					if lb.IP != "" {
+						addrs = append(addrs, lb.IP)
+					} else if lb.Hostname != "" {
+						addrs = append(addrs, lb.Hostname)
+					}
+				}
+				ingressStatus = metav1.ConditionTrue
+				ingressReason = "Assigned"
+				ingressMsg = strings.Join(addrs, ", ")
+			}
+		}
+		apimeta.SetStatusCondition(&fresh.Status.Conditions, metav1.Condition{
+			Type:               v1.ConditionTypeIngressReady,
+			Status:             ingressStatus,
+			Reason:             ingressReason,
+			Message:            ingressMsg,
+			LastTransitionTime: now,
+			ObservedGeneration: fresh.Generation,
+		})
+	}
+
+	// HPAActive: set when autoscaling is enabled; reflects whether the HPA is operating.
+	if appDef.Spec.Autoscaling != nil && appDef.Spec.Autoscaling.Enabled {
+		hpa := &autoscalingv2.HorizontalPodAutoscaler{}
+		hpaStatus := metav1.ConditionFalse
+		hpaReason := "Creating"
+		hpaMsg := "HPA is being created"
+		if err := r.Get(ctx, types.NamespacedName{Name: appDef.Name, Namespace: appDef.Namespace}, hpa); err == nil {
+			hpaStatus = metav1.ConditionTrue
+			hpaReason = "Active"
+			hpaMsg = fmt.Sprintf("scaling %d/%d replicas (min %d, max %d)",
+				hpa.Status.CurrentReplicas, hpa.Status.DesiredReplicas,
+				*hpa.Spec.MinReplicas, hpa.Spec.MaxReplicas)
+		}
+		apimeta.SetStatusCondition(&fresh.Status.Conditions, metav1.Condition{
+			Type:               v1.ConditionTypeHPAActive,
+			Status:             hpaStatus,
+			Reason:             hpaReason,
+			Message:            hpaMsg,
+			LastTransitionTime: now,
+			ObservedGeneration: fresh.Generation,
+		})
+	}
 
 	if err := r.Status().Update(ctx, fresh); err != nil {
 		return fmt.Errorf("failed to update AppDefinition status: %w", err)
@@ -931,6 +1132,16 @@ func selectorLabels(name string) map[string]string {
 
 func pvcName(appName string) string {
 	return appName + "-disk"
+}
+
+// resolvedSecretName returns the Kubernetes Secret name to use for a SecretMount.
+// If SecretRef is set, the referenced secret is used directly (operator does not manage it).
+// Otherwise the operator-managed secret named "<app>-<name>" is used.
+func resolvedSecretName(appName string, sec v1.SecretMount) string {
+	if sec.SecretRef != "" {
+		return sec.SecretRef
+	}
+	return appName + "-" + sec.Name
 }
 
 // tlsSecretName generates a DNS-safe TLS secret name from the app name and domain.

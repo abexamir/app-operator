@@ -114,6 +114,19 @@ type ContainerSpec struct {
 	Resources      corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
+// InitContainerSpec defines a container that runs to completion before any main
+// containers start. Init containers share the same volumes, ConfigMaps, Secrets,
+// and disk mounts as the main containers but do not expose ports and do not
+// receive lifecycle hooks.
+type InitContainerSpec struct {
+	Name      string                      `json:"name"`
+	Image     string                      `json:"image"`
+	Command   []string                    `json:"command,omitempty"`
+	Args      []string                    `json:"args,omitempty"`
+	Env       []corev1.EnvVar             `json:"env,omitempty"`
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
 // ---------------------------------------
 // Autoscaling
 // ---------------------------------------
@@ -140,18 +153,27 @@ type ConfigMapMount struct {
 	Data      map[string]string `json:"data"`
 }
 
-// SecretMount defines a Secret whose content is embedded directly in the AppDefinition.
-// The operator creates and owns a Secret named "<appname>-<name>".
-// Set MountPath to mount the secret as a directory of files.
-// Set AsEnvVars to inject every key as an environment variable in all containers.
-// Both options may be used at the same time.
+// SecretMount defines a Secret used by the application.
+// Use Data to embed secret values directly (the operator creates and owns the Secret).
+// Use SecretRef to reference a pre-existing Secret in the same namespace (operator does not manage it).
+// Data and SecretRef are mutually exclusive.
+// Set MountPath to mount the secret as a directory of files into all containers.
+// Set AsEnvVars to inject every key as an environment variable into all containers.
+// Both MountPath and AsEnvVars may be used at the same time.
+//
+// +kubebuilder:validation:XValidation:rule="!(has(self.secretRef) && self.secretRef != ” && self.data != null)",message="secretRef and data are mutually exclusive; use one or the other"
 type SecretMount struct {
 	Name string `json:"name"`
 	// MountPath mounts the secret as a directory of files into all containers. Optional.
 	MountPath string `json:"mountPath,omitempty"`
 	// AsEnvVars injects all secret keys as environment variables into all containers.
-	AsEnvVars bool              `json:"asEnvVars,omitempty"`
-	Data      map[string]string `json:"data"`
+	AsEnvVars bool `json:"asEnvVars,omitempty"`
+	// Data defines inline secret values. The operator creates a Secret named "<app>-<name>".
+	// Mutually exclusive with SecretRef.
+	Data map[string]string `json:"data,omitempty"`
+	// SecretRef names a pre-existing Secret in the same namespace. The operator mounts or
+	// injects it but does not create, update, or delete it. Mutually exclusive with Data.
+	SecretRef string `json:"secretRef,omitempty"`
 }
 
 // ---------------------------------------
@@ -184,7 +206,10 @@ type LifecycleSpec struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.autoscaling) || !self.autoscaling.enabled || !has(self.disk)",message="autoscaling cannot be enabled on stateful apps with persistent disk"
 type AppDefinitionSpec struct {
 	// Containers defines the application containers to run.
-	Containers         []ContainerSpec            `json:"containers"`
+	Containers []ContainerSpec `json:"containers"`
+	// InitContainers run to completion before the main containers start.
+	// Useful for migrations, permission setup, or config rendering.
+	InitContainers     []InitContainerSpec        `json:"initContainers,omitempty"`
 	Replicas           *int32                     `json:"replicas,omitempty"`
 	Domains            []DomainSpec               `json:"domains,omitempty"`
 	Disk               *DiskConfig                `json:"disk,omitempty"`
@@ -207,7 +232,7 @@ type AppDefinitionSpec struct {
 	// ConfigMaps defines inline ConfigMaps created and managed by the operator.
 	// Each entry's data is mounted at MountPath in all containers.
 	ConfigMaps []ConfigMapMount `json:"configMaps,omitempty"`
-	// Secrets defines inline Secrets created and managed by the operator.
+	// Secrets defines inline or externally-referenced Secrets.
 	// Use MountPath to mount as files and/or AsEnvVars to inject as environment variables.
 	Secrets []SecretMount `json:"secrets,omitempty"`
 }
@@ -217,8 +242,11 @@ type AppDefinitionSpec struct {
 // ---------------------------------------
 
 const (
-	ConditionTypeReady       = "Ready"
-	ConditionTypeProgressing = "Progressing"
+	ConditionTypeReady        = "Ready"
+	ConditionTypeProgressing  = "Progressing"
+	ConditionTypeDiskReady    = "DiskReady"
+	ConditionTypeIngressReady = "IngressReady"
+	ConditionTypeHPAActive    = "HPAActive"
 )
 
 type AppDefinitionStatus struct {

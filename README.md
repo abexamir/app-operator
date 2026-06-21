@@ -88,7 +88,7 @@ kubectl describe appdefinition my-app   # full Conditions and LastError
 | `phase` | `Available` / `Progressing` / `Failed` / `Paused` |
 | `readyReplicas` | Pods with a Ready condition |
 | `replicas` | Desired replica count |
-| `conditions` | `Ready` and `Progressing` (standard Kubernetes conditions) |
+| `conditions` | `Ready`, `DiskReady`, `IngressReady`, `HPAActive` |
 | `lastError` | Most recent reconciliation error |
 
 ---
@@ -138,6 +138,24 @@ containers:
         command: ["/bin/sh", "-c", "pgrep nginx"]
       initialDelaySeconds: 15
       periodSeconds: 20
+```
+
+### `initContainers`
+
+Containers that run to completion before any main containers start. Useful for migrations, permission setup, or config rendering. Init containers share the same volumes, ConfigMaps, Secrets, and disk mounts as the main containers.
+
+```yaml
+initContainers:
+  - name: migrate
+    image: my-app:latest
+    command: ["./migrate", "--apply"]
+    env:
+      - name: DB_HOST
+        value: postgres.default.svc
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
 ```
 
 ### `replicas`
@@ -201,7 +219,7 @@ disk:
       subPath: logs
 ```
 
-Storage size is **immutable** after creation. To resize, delete the AppDefinition and recreate it.
+Storage size can be **expanded** by increasing `sizeInGi`. The storage class must have `allowVolumeExpansion: true`. Shrinking is not supported — to downsize, delete the AppDefinition and recreate it.
 
 ### `configMaps`
 
@@ -248,9 +266,16 @@ secrets:
     asEnvVars: true
     data:
       API_KEY: "abc123"
+
+  # Reference a pre-existing Secret — operator mounts/injects it but does not own it
+  - name: external-db
+    asEnvVars: true
+    secretRef: my-existing-db-secret   # must exist in the same namespace
 ```
 
-> **Warning**: Secret `data` is stored in plain text in the AppDefinition spec and in etcd. For production, consider [External Secrets Operator](https://external-secrets.io) or [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets).
+`data` and `secretRef` are mutually exclusive and enforced at the API level.
+
+> **Warning**: Inline `data` is stored in plain text in the AppDefinition spec and in etcd. For production, prefer `secretRef` pointing to a Secret managed by [External Secrets Operator](https://external-secrets.io) or [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets).
 
 ### `imagePullSecrets`
 
