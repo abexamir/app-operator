@@ -1906,10 +1906,8 @@ spec:
                   - name
                   type: object
                   x-kubernetes-validations:
-                  - message: secretRef and data are mutually exclusive; use one or
-                      the other
-                    rule: '!(has(self.secretRef) && self.secretRef != ” && self.data
-                      != null)'
+                  - message: secretRef and data are mutually exclusive
+                    rule: '!(has(self.secretRef) && size(self.secretRef) > 0 && has(self.data))'
                 type: array
               securityContext:
                 description: |-
