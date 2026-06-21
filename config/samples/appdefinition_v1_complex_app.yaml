@@ -4,94 +4,86 @@ metadata:
   name: complex-app
   namespace: default
 spec:
-  # Source configuration with multiple containers
-  source:
-    type: dockerImage
-    dockerImage:
-      containers:
-        # Main web application container
-        - name: web
-          image: nginx:1.25-alpine
-          command: ["nginx"]
-          args: ["-g", "daemon off;"]
-          ports:
-            - name: http
-              containerPort: 80
-              servicePort: 80
-              protocol: TCP
-              expose: true
-              metricsPath: /metrics
-          env:
-            - name: NGINX_HOST
-              value: "example.com"
-            - name: NGINX_PORT
-              value: "80"
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
-          readinessProbe:
-            type: httpGet
-            httpGet:
-              path: /health
-              port: 80
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            timeoutSeconds: 2
-            failureThreshold: 3
-            successThreshold: 1
-          livenessProbe:
-            type: httpGet
-            httpGet:
-              path: /health
-              port: 80
-            initialDelaySeconds: 15
-            periodSeconds: 20
-            timeoutSeconds: 2
-            failureThreshold: 3
-            successThreshold: 1
+  containers:
+    - name: web
+      image: nginx:1.25-alpine
+      command: ["nginx"]
+      args: ["-g", "daemon off;"]
+      ports:
+        - name: http
+          containerPort: 80
+          servicePort: 80
+          protocol: TCP
+          expose: true
+          metricsPath: /metrics
+      env:
+        - name: NGINX_HOST
+          value: "example.com"
+        - name: NGINX_PORT
+          value: "80"
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "512Mi"
+      readinessProbe:
+        type: httpGet
+        httpGet:
+          path: /health
+          port: 80
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 2
+        failureThreshold: 3
+        successThreshold: 1
+      livenessProbe:
+        type: httpGet
+        httpGet:
+          path: /health
+          port: 80
+        initialDelaySeconds: 15
+        periodSeconds: 20
+        timeoutSeconds: 2
+        failureThreshold: 3
+        successThreshold: 1
 
-        # Sidecar container for metrics collection
+    - name: metrics
+      image: prom/prometheus:v2.45.0
+      command: ["prometheus"]
+      args: ["--config.file=/etc/prometheus/prometheus.yml"]
+      ports:
         - name: metrics
-          image: prom/prometheus:v2.45.0
-          command: ["prometheus"]
-          args: ["--config.file=/etc/prometheus/prometheus.yml"]
-          ports:
-            - name: metrics
-              containerPort: 9090
-              servicePort: 9090
-              protocol: TCP
-              expose: true
-              metricsPath: /metrics
-          resources:
-            requests:
-              cpu: "50m"
-              memory: "64Mi"
-            limits:
-              cpu: "200m"
-              memory: "256Mi"
-          readinessProbe:
-            type: httpGet
-            httpGet:
-              path: /-/ready
-              port: 9090
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            type: httpGet
-            httpGet:
-              path: /-/healthy
-              port: 9090
-            initialDelaySeconds: 15
-            periodSeconds: 20
+          containerPort: 9090
+          servicePort: 9090
+          protocol: TCP
+          expose: true
+          metricsPath: /metrics
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "64Mi"
+        limits:
+          cpu: "200m"
+          memory: "256Mi"
+      readinessProbe:
+        type: httpGet
+        httpGet:
+          path: /-/ready
+          port: 9090
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      livenessProbe:
+        type: httpGet
+        httpGet:
+          path: /-/healthy
+          port: 9090
+        initialDelaySeconds: 15
+        periodSeconds: 20
 
-  # Scaling configuration
   replicas: 3
 
-  # Domain configuration with TLS
   domains:
     - name: app.example.com
       path: /
@@ -108,7 +100,6 @@ spec:
       annotations:
         cert-manager.io/cluster-issuer: letsencrypt-prod
 
-  # Persistent storage configuration
   disk:
     sizeInGi: 10
     storageClassName: standard
@@ -119,7 +110,25 @@ spec:
       - mountPath: /logs
         subPath: logs
 
-  # Logging configuration
+  configMaps:
+    - name: prometheus-config
+      mountPath: /etc/prometheus
+      data:
+        prometheus.yml: |
+          global:
+            scrape_interval: 30s
+          scrape_configs:
+            - job_name: 'web'
+              static_configs:
+                - targets: ['localhost:80']
+
+  secrets:
+    - name: app-credentials
+      asEnvVars: true
+      data:
+        DB_PASSWORD: "super-secret-password"
+        API_KEY: "my-api-key-12345"
+
   loggingConfig:
     stdout:
       enabled: true
@@ -132,7 +141,6 @@ spec:
         format: json
         multilinePattern: "^\\d{4}-\\d{2}-\\d{2}"
 
-  # Monitoring configuration
   monitoringConfig:
     enabled: true
     scrapeInterval: "30s"
@@ -141,17 +149,14 @@ spec:
       app.kubernetes.io/instance: complex-app
       app.kubernetes.io/component: web
 
-  # Pod configuration
   securityContext:
     runAsUser: 1000
     runAsGroup: 1000
     fsGroup: 1000
     runAsNonRoot: true
 
-  # Service configuration
   serviceType: ClusterIP
 
-  # Ingress configuration
   ingressAnnotations:
     nginx.ingress.kubernetes.io/proxy-body-size: "50m"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "300"

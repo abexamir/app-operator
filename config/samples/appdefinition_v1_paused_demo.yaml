@@ -4,18 +4,15 @@ metadata:
   name: paused-demo
   namespace: apps
 spec:
-  source:
-    type: dockerImage
-    dockerImage:
-      containers:
-        - name: web
-          image: nginx:1.25-alpine
-          ports:
-            - name: http
-              containerPort: 80
-              servicePort: 80
-              protocol: TCP
-              expose: true
+  containers:
+    - name: web
+      image: nginx:1.25-alpine
+      ports:
+        - name: http
+          containerPort: 80
+          servicePort: 80
+          protocol: TCP
+          expose: true
   replicas: 1
   paused: true
   serviceType: LoadBalancer
