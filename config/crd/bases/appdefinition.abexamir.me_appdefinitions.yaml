@@ -1935,6 +1935,13 @@ spec:
             required:
             - containers
             type: object
+            x-kubernetes-validations:
+            - message: stateful apps with persistent disk cannot have more than 1
+                replica; multiple instances would corrupt the shared TSDB/volume
+              rule: '!has(self.disk) || !has(self.replicas) || self.replicas <= 1'
+            - message: autoscaling cannot be enabled on stateful apps with persistent
+                disk
+              rule: '!has(self.autoscaling) || !self.autoscaling.enabled || !has(self.disk)'
           status:
             properties:
               conditions:

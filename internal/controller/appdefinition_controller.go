@@ -249,13 +249,15 @@ func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
 
 func buildContainers(appDef *v1.AppDefinition) []corev1.Container {
 	containers := make([]corev1.Container, 0, len(appDef.Spec.Containers))
-	for _, c := range appDef.Spec.Containers {
-		containers = append(containers, buildContainer(appDef, c))
+	for i, c := range appDef.Spec.Containers {
+		containers = append(containers, buildContainer(appDef, c, i == 0))
 	}
 	return containers
 }
 
-func buildContainer(appDef *v1.AppDefinition, c v1.ContainerSpec) corev1.Container {
+// buildContainer builds a corev1.Container from a ContainerSpec.
+// isPrimary marks the first container, which receives pod-level lifecycle hooks.
+func buildContainer(appDef *v1.AppDefinition, c v1.ContainerSpec, isPrimary bool) corev1.Container {
 	container := corev1.Container{
 		Name:    c.Name,
 		Image:   c.Image,
@@ -286,8 +288,10 @@ func buildContainer(appDef *v1.AppDefinition, c v1.ContainerSpec) corev1.Contain
 		container.Resources = c.Resources
 	}
 
-	// Apply pod-level lifecycle hooks to every container.
-	if appDef.Spec.Lifecycle != nil {
+	// Apply pod-level lifecycle hooks to the primary container only.
+	// Sidecars often lack a shell or the expected binaries, so applying hooks
+	// to all containers causes FailedPostStartHook / CrashLoopBackOff.
+	if isPrimary && appDef.Spec.Lifecycle != nil {
 		lc := &corev1.Lifecycle{}
 		if appDef.Spec.Lifecycle.PostStart != nil && appDef.Spec.Lifecycle.PostStart.Exec != nil {
 			lc.PostStart = &corev1.LifecycleHandler{Exec: appDef.Spec.Lifecycle.PostStart.Exec}
