@@ -40,22 +40,17 @@ var _ = Describe("AppDefinition Controller", func() {
 		namespacedName := types.NamespacedName{Name: resourceName, Namespace: namespace}
 
 		minimalSpec := appdefinitionv1.AppDefinitionSpec{
-			Source: appdefinitionv1.SourceSpec{
-				Type: "dockerImage",
-				DockerImage: &appdefinitionv1.DockerImageSource{
-					Containers: []appdefinitionv1.ContainerSpec{
+			Containers: []appdefinitionv1.ContainerSpec{
+				{
+					Name:  "web",
+					Image: "nginx:latest",
+					Ports: []appdefinitionv1.PortSpec{
 						{
-							Name:  "web",
-							Image: "nginx:latest",
-							Ports: []appdefinitionv1.PortSpec{
-								{
-									Name:          "http",
-									ContainerPort: 80,
-									ServicePort:   80,
-									Protocol:      "TCP",
-									Expose:        true,
-								},
-							},
+							Name:          "http",
+							ContainerPort: 80,
+							ServicePort:   80,
+							Protocol:      "TCP",
+							Expose:        true,
 						},
 					},
 				},

@@ -42,6 +42,8 @@ type AppDefinitionReconciler struct {
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
 
 func (r *AppDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -98,6 +100,12 @@ func (r *AppDefinitionReconciler) reconcileAll(ctx context.Context, appDef *v1.A
 		return nil
 	}
 
+	if err := r.reconcileConfigMaps(ctx, appDef); err != nil {
+		return err
+	}
+	if err := r.reconcileSecrets(ctx, appDef); err != nil {
+		return err
+	}
 	if err := r.reconcileDeployment(ctx, appDef); err != nil {
 		return err
 	}
@@ -170,10 +178,6 @@ func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDe
 		}
 
 		podSpec.Volumes = buildVolumes(appDef)
-
-		if appDef.Spec.Source.DockerImage == nil {
-			return fmt.Errorf("dockerImage source type specified but no dockerImage config provided")
-		}
 		podSpec.Containers = buildContainers(appDef)
 
 		return ctrl.SetControllerReference(appDef, deployment, r.Scheme)
@@ -189,9 +193,14 @@ func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDe
 }
 
 func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
-	count := len(appDef.Spec.ConfigMaps) + len(appDef.Spec.Secrets)
+	count := len(appDef.Spec.ConfigMaps)
 	if appDef.Spec.Disk != nil {
 		count++
+	}
+	for _, sec := range appDef.Spec.Secrets {
+		if sec.MountPath != "" {
+			count++
+		}
 	}
 	volumes := make([]corev1.Volume, 0, count)
 
@@ -206,27 +215,30 @@ func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
 		})
 	}
 
+	// Inline ConfigMaps: always mounted as a directory.
 	for _, cm := range appDef.Spec.ConfigMaps {
-		optional := cm.Optional
 		volumes = append(volumes, corev1.Volume{
 			Name: "cm-" + cm.Name,
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{Name: cm.Name},
-					Optional:             &optional,
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: appDef.Name + "-" + cm.Name,
+					},
 				},
 			},
 		})
 	}
 
+	// Inline Secrets: volume only created when MountPath is set.
 	for _, sec := range appDef.Spec.Secrets {
-		optional := sec.Optional
+		if sec.MountPath == "" {
+			continue
+		}
 		volumes = append(volumes, corev1.Volume{
 			Name: "secret-" + sec.Name,
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: sec.Name,
-					Optional:   &optional,
+					SecretName: appDef.Name + "-" + sec.Name,
 				},
 			},
 		})
@@ -236,8 +248,8 @@ func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
 }
 
 func buildContainers(appDef *v1.AppDefinition) []corev1.Container {
-	containers := make([]corev1.Container, 0, len(appDef.Spec.Source.DockerImage.Containers))
-	for _, c := range appDef.Spec.Source.DockerImage.Containers {
+	containers := make([]corev1.Container, 0, len(appDef.Spec.Containers))
+	for _, c := range appDef.Spec.Containers {
 		containers = append(containers, buildContainer(appDef, c))
 	}
 	return containers
@@ -288,10 +300,29 @@ func buildContainer(appDef *v1.AppDefinition, c v1.ContainerSpec) corev1.Contain
 		}
 	}
 
-	// Volume mounts: disk partitions, configmaps, secrets.
-	mountCount := len(appDef.Spec.ConfigMaps) + len(appDef.Spec.Secrets)
+	// envFrom: inject inline secrets marked as env vars.
+	for _, sec := range appDef.Spec.Secrets {
+		if !sec.AsEnvVars {
+			continue
+		}
+		container.EnvFrom = append(container.EnvFrom, corev1.EnvFromSource{
+			SecretRef: &corev1.SecretEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: appDef.Name + "-" + sec.Name,
+				},
+			},
+		})
+	}
+
+	// Volume mounts: disk partitions, configmaps, secrets (only those with MountPath).
+	mountCount := len(appDef.Spec.ConfigMaps)
 	if appDef.Spec.Disk != nil {
 		mountCount += len(appDef.Spec.Disk.Partitions)
+	}
+	for _, sec := range appDef.Spec.Secrets {
+		if sec.MountPath != "" {
+			mountCount++
+		}
 	}
 	mounts := make([]corev1.VolumeMount, 0, mountCount)
 	if appDef.Spec.Disk != nil {
@@ -310,6 +341,9 @@ func buildContainer(appDef *v1.AppDefinition, c v1.ContainerSpec) corev1.Contain
 		})
 	}
 	for _, sec := range appDef.Spec.Secrets {
+		if sec.MountPath == "" {
+			continue
+		}
 		mounts = append(mounts, corev1.VolumeMount{
 			Name:      "secret-" + sec.Name,
 			MountPath: sec.MountPath,
@@ -360,23 +394,21 @@ func (r *AppDefinitionReconciler) reconcileService(ctx context.Context, appDef *
 		service.Spec.Selector = selectorLabels(appDef.Name)
 
 		service.Spec.Ports = nil
-		if appDef.Spec.Source.DockerImage != nil {
-			for _, container := range appDef.Spec.Source.DockerImage.Containers {
-				for _, port := range container.Ports {
-					if !port.Expose {
-						continue
-					}
-					proto := corev1.Protocol(port.Protocol)
-					if proto == "" {
-						proto = corev1.ProtocolTCP
-					}
-					service.Spec.Ports = append(service.Spec.Ports, corev1.ServicePort{
-						Name:       port.Name,
-						Port:       port.ServicePort,
-						TargetPort: intstr.FromInt32(port.ContainerPort),
-						Protocol:   proto,
-					})
+		for _, container := range appDef.Spec.Containers {
+			for _, port := range container.Ports {
+				if !port.Expose {
+					continue
 				}
+				proto := corev1.Protocol(port.Protocol)
+				if proto == "" {
+					proto = corev1.ProtocolTCP
+				}
+				service.Spec.Ports = append(service.Spec.Ports, corev1.ServicePort{
+					Name:       port.Name,
+					Port:       port.ServicePort,
+					TargetPort: intstr.FromInt32(port.ContainerPort),
+					Protocol:   proto,
+				})
 			}
 		}
 
@@ -388,6 +420,63 @@ func (r *AppDefinitionReconciler) reconcileService(ctx context.Context, appDef *
 	}
 	if op != controllerutil.OperationResultNone {
 		logger.Info("Service reconciled", "operation", op)
+	}
+	return nil
+}
+
+// ----------------------------------------------------------------
+// Inline ConfigMaps
+// ----------------------------------------------------------------
+
+func (r *AppDefinitionReconciler) reconcileConfigMaps(ctx context.Context, appDef *v1.AppDefinition) error {
+	logger := log.FromContext(ctx)
+	for _, cm := range appDef.Spec.ConfigMaps {
+		obj := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      appDef.Name + "-" + cm.Name,
+				Namespace: appDef.Namespace,
+			},
+		}
+		op, err := ctrl.CreateOrUpdate(ctx, r.Client, obj, func() error {
+			obj.Labels = standardLabels(appDef.Name)
+			obj.Data = cm.Data
+			return ctrl.SetControllerReference(appDef, obj, r.Scheme)
+		})
+		if err != nil {
+			return fmt.Errorf("failed to reconcile ConfigMap %s: %w", cm.Name, err)
+		}
+		if op != controllerutil.OperationResultNone {
+			logger.Info("ConfigMap reconciled", "name", obj.Name, "operation", op)
+		}
+	}
+	return nil
+}
+
+// ----------------------------------------------------------------
+// Inline Secrets
+// ----------------------------------------------------------------
+
+func (r *AppDefinitionReconciler) reconcileSecrets(ctx context.Context, appDef *v1.AppDefinition) error {
+	logger := log.FromContext(ctx)
+	for _, sec := range appDef.Spec.Secrets {
+		obj := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      appDef.Name + "-" + sec.Name,
+				Namespace: appDef.Namespace,
+			},
+		}
+		op, err := ctrl.CreateOrUpdate(ctx, r.Client, obj, func() error {
+			obj.Labels = standardLabels(appDef.Name)
+			obj.Type = corev1.SecretTypeOpaque
+			obj.StringData = sec.Data
+			return ctrl.SetControllerReference(appDef, obj, r.Scheme)
+		})
+		if err != nil {
+			return fmt.Errorf("failed to reconcile Secret %s: %w", sec.Name, err)
+		}
+		if op != controllerutil.OperationResultNone {
+			logger.Info("Secret reconciled", "name", obj.Name, "operation", op)
+		}
 	}
 	return nil
 }
@@ -683,6 +772,8 @@ func (r *AppDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&v1.AppDefinition{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
+		Owns(&corev1.ConfigMap{}).
+		Owns(&corev1.Secret{}).
 		Owns(&networkingv1.Ingress{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
