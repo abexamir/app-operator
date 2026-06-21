@@ -1,135 +1,509 @@
-# appoperator
-// TODO(user): Add simple overview of use/purpose
+# app-operator
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+A Kubernetes operator that lets you deploy containerized applications using a single high-level `AppDefinition` custom resource, instead of manually managing Deployments, Services, Ingresses, PersistentVolumeClaims, and HorizontalPodAutoscalers.
+
+Built with [Kubebuilder](https://book.kubebuilder.io/) v4 on top of [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime).
+
+---
+
+## Overview
+
+`AppDefinition` is a namespaced CRD (`appdefinition.abexamir.me/v1`) that describes everything about how an application should run. The operator watches for these resources and reconciles the underlying Kubernetes primitives:
+
+| AppDefinition feature | Kubernetes resource created |
+|---|---|
+| `source.dockerImage` containers | `Deployment` |
+| `ports[].expose: true` | `Service` |
+| `domains[]` | `Ingress` |
+| `disk` | `PersistentVolumeClaim` |
+| `autoscaling.enabled: true` | `HorizontalPodAutoscaler` |
+
+All child resources are owned by the `AppDefinition` and are garbage-collected when it is deleted. A finalizer (`appdefinition.abexamir.me/finalizer`) is added on creation to manage orderly cleanup.
+
+---
+
+## Status
+
+The operator reports its state on the `AppDefinition` status subresource. You can inspect it with:
+
+```sh
+kubectl get appdefinition <name>   # shows Phase, Ready replicas, Replicas
+kubectl describe appdefinition <name>   # shows full Conditions
+```
+
+| Status field | Description |
+|---|---|
+| `phase` | High-level state: `Available`, `Progressing`, `Failed`, or `Paused` |
+| `readyReplicas` | Number of pods with a Ready condition |
+| `replicas` | Desired replica count |
+| `observedGeneration` | Last generation the controller processed |
+| `conditions` | Standard Kubernetes conditions: `Ready` and `Progressing` |
+| `lastError` | Last reconciliation error message |
+
+---
+
+## AppDefinition Spec Reference
+
+### `source` (required)
+
+Defines where to pull container images from. Only `dockerImage` is supported.
+
+```yaml
+source:
+  type: dockerImage
+  dockerImage:
+    containers:
+      - name: web
+        image: nginx:1.25-alpine
+        command: ["nginx"]
+        args: ["-g", "daemon off;"]
+        env:
+          - name: PORT
+            value: "8080"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        ports:
+          - name: http
+            containerPort: 80
+            servicePort: 80
+            protocol: TCP
+            expose: true         # creates a Service port for this
+            metricsPath: /metrics
+        readinessProbe:
+          type: httpGet          # httpGet | tcpSocket | exec
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 3
+          successThreshold: 1
+        livenessProbe:
+          type: httpGet
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 15
+          periodSeconds: 20
+```
+
+Multiple containers are supported (main app + sidecars). Only ports with `expose: true` are added to the Service.
+
+### `replicas`
+
+```yaml
+replicas: 3   # defaults to 1
+```
+
+Ignored when `autoscaling.enabled: true` (the HPA controls the replica count instead).
+
+### `paused`
+
+Suspends reconciliation without deleting any existing resources.
+
+```yaml
+paused: true
+```
+
+When set, the operator stops reconciling child resources and sets `status.phase` to `Paused`. Deletion still works normally.
+
+### `autoscaling`
+
+Creates a `HorizontalPodAutoscaler` (autoscaling/v2). When enabled, the `replicas` field is used as `minReplicas`.
+
+```yaml
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+```
+
+Disabling autoscaling (`enabled: false`) deletes the HPA if one exists.
+
+### `imagePullSecrets`
+
+References to Secrets in the same namespace used for pulling private container images.
+
+```yaml
+imagePullSecrets:
+  - name: my-registry-secret
+```
+
+### `configMaps`
+
+Mounts ConfigMaps as read-only directories into all containers.
+
+```yaml
+configMaps:
+  - name: app-config
+    mountPath: /etc/config
+  - name: feature-flags
+    mountPath: /etc/flags
+    optional: true
+```
+
+### `secrets`
+
+Mounts Secrets as read-only directories into all containers.
+
+```yaml
+secrets:
+  - name: app-tls
+    mountPath: /etc/tls
+  - name: db-credentials
+    mountPath: /etc/db
+    optional: true
+```
+
+### `domains`
+
+Creates an Ingress. Supports TLS, cert-manager integration, per-domain annotations, and routing to specific service ports.
+
+```yaml
+domains:
+  - name: app.example.com
+    path: /
+    tls: true
+    redirect_tls: true
+    certIssuer: letsencrypt-prod
+    portName: http              # service port name to route to (default: "http")
+    secretName: my-tls-secret   # TLS secret override (auto-generated as <app>-<domain>-tls if omitted)
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  - name: api.example.com
+    path: /api
+    tls: false
+    portName: api
+```
+
+### `disk`
+
+Creates a `PersistentVolumeClaim` and mounts it into every container.
+
+```yaml
+disk:
+  sizeInGi: 10
+  storageClassName: standard
+  setFsGroup: true
+  partitions:
+    - mountPath: /data
+      subPath: data
+    - mountPath: /logs
+      subPath: logs
+```
+
+A single PVC named `<app-name>-disk` is created with `ReadWriteOnce`. Storage size cannot be changed after creation.
+
+### `lifecycle`
+
+Exec-based `postStart` and `preStop` lifecycle hooks applied to all containers.
+
+```yaml
+lifecycle:
+  postStart:
+    exec:
+      command: ["/bin/sh", "-c", "echo started"]
+  preStop:
+    exec:
+      command: ["/bin/sh", "-c", "sleep 5"]
+```
+
+### `loggingConfig`
+
+Metadata that describes the logging configuration (used by log collectors/agents).
+
+```yaml
+loggingConfig:
+  stdout:
+    enabled: true
+    format: json       # json | text
+  stderr:
+    enabled: true
+    format: json
+  files:
+    - path: /logs/app.log
+      format: json
+      multilinePattern: "^\\d{4}-\\d{2}-\\d{2}"
+```
+
+### `monitoringConfig`
+
+Metadata for Prometheus ServiceMonitor integration.
+
+```yaml
+monitoringConfig:
+  enabled: true
+  scrapeInterval: "30s"
+  labels:
+    app.kubernetes.io/name: my-app
+```
+
+### `securityContext`
+
+Pod-level security context.
+
+```yaml
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  runAsNonRoot: true
+```
+
+### `serviceType`
+
+Kubernetes Service type. Defaults to `ClusterIP`.
+
+```yaml
+serviceType: ClusterIP   # ClusterIP | NodePort | LoadBalancer
+```
+
+### `ingressClass` and `ingressAnnotations`
+
+```yaml
+ingressClass: nginx
+ingressAnnotations:
+  nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+  nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+```
+
+### `nodeSelector`, `tolerations`, `affinity`
+
+Standard Kubernetes scheduling controls passed directly to the pod spec.
+
+```yaml
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "app"
+    effect: "NoSchedule"
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: my-app
+```
+
+---
+
+## Minimal Example
+
+```yaml
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: sample-app
+spec:
+  source:
+    type: dockerImage
+    dockerImage:
+      containers:
+        - name: web
+          image: nginx:latest
+          ports:
+            - name: http
+              containerPort: 80
+              servicePort: 80
+              protocol: TCP
+              expose: true
+  domains:
+    - name: example.com
+      path: /
+      tls: true
+```
+
+## Full-featured Example
+
+```yaml
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: my-app
+spec:
+  source:
+    type: dockerImage
+    dockerImage:
+      containers:
+        - name: web
+          image: my-registry.io/my-app:v1.2.3
+          ports:
+            - name: http
+              containerPort: 8080
+              servicePort: 80
+              protocol: TCP
+              expose: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            type: httpGet
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+  imagePullSecrets:
+    - name: my-registry-secret
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+
+  domains:
+    - name: my-app.example.com
+      path: /
+      tls: true
+      redirect_tls: true
+      certIssuer: letsencrypt-prod
+      portName: http
+
+  disk:
+    sizeInGi: 20
+    storageClassName: standard
+
+  configMaps:
+    - name: app-config
+      mountPath: /etc/config
+
+  secrets:
+    - name: db-credentials
+      mountPath: /etc/db
+
+  lifecycle:
+    preStop:
+      exec:
+        command: ["/bin/sh", "-c", "sleep 5"]
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+```
+
+---
 
 ## Getting Started
 
 ### Prerequisites
-- go version v1.24.0+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+- Go v1.24+
+- Docker 17.03+
+- kubectl v1.11.3+
+- Access to a Kubernetes v1.11.3+ cluster
+
+### Run locally (against current kubeconfig)
 
 ```sh
-make docker-build docker-push IMG=<some-registry>/appoperator:tag
+make install   # installs the CRD
+make run       # runs the controller from your host
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
-
-**Install the CRDs into the cluster:**
+### Deploy to cluster
 
 ```sh
-make install
-```
-
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
-
-```sh
-make deploy IMG=<some-registry>/appoperator:tag
-```
-
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
-
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
-
-```sh
+make docker-build docker-push IMG=<registry>/app-operator:tag
+make deploy IMG=<registry>/app-operator:tag
 kubectl apply -k config/samples/
 ```
 
->**NOTE**: Ensure that the samples has default values to test it out.
-
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
+### Uninstall
 
 ```sh
 kubectl delete -k config/samples/
-```
-
-**Delete the APIs(CRDs) from the cluster:**
-
-```sh
+make undeploy
 make uninstall
 ```
 
-**UnDeploy the controller from the cluster:**
+---
+
+## Development
 
 ```sh
-make undeploy
+make generate    # regenerate DeepCopy methods
+make manifests   # regenerate CRDs and RBAC
+make fmt vet     # format and vet code
+make test        # run unit tests with envtest
+make lint        # run golangci-lint
+make test-e2e    # run e2e tests against a Kind cluster (spins up/tears down automatically)
 ```
 
-## Project Distribution
-
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
+### Build a consolidated install bundle
 
 ```sh
-make build-installer IMG=<some-registry>/appoperator:tag
+make build-installer IMG=<registry>/app-operator:tag
+# outputs dist/install.yaml — apply with:
+kubectl apply -f dist/install.yaml
 ```
 
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
+---
 
-2. Using the installer
+## Architecture
 
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/appoperator/<tag or branch>/dist/install.yaml
+```
+AppDefinition CR
+       │
+       ▼
+AppDefinitionReconciler (internal/controller/appdefinition_controller.go)
+       │
+       ├── reconcileDeployment()   → apps/v1 Deployment  (volumes, mounts, lifecycle, imagePullSecrets)
+       ├── reconcileService()      → core/v1 Service      (exposed ports only)
+       ├── reconcilePVC()          → core/v1 PVC          (creation only; size is immutable)
+       ├── reconcileIngress()      → networking.k8s.io/v1 Ingress  (per-domain TLS secrets)
+       ├── reconcileHPA()          → autoscaling/v2 HPA   (created/deleted based on autoscaling.enabled)
+       └── updateStatus()          → status subresource   (phase, readyReplicas, conditions)
 ```
 
-### By providing a Helm Chart
+The controller uses `ctrl.CreateOrUpdate` for idempotent reconciliation. Owner references are set on all child resources so they are garbage-collected with the parent `AppDefinition`. The first reconcile adds a finalizer and requeues; actual resource reconciliation happens on the second pass.
 
-1. Build the chart using the optional helm plugin
+### Reconcile phases
 
-```sh
-kubebuilder edit --plugins=helm/v1-alpha
-```
+1. **Finalizer pass** — adds `appdefinition.abexamir.me/finalizer`, requeues
+2. **Deletion** — if `DeletionTimestamp` is set, removes finalizer and exits
+3. **Paused guard** — if `spec.paused: true`, sets status to `Paused` and exits without touching resources
+4. **Resource reconciliation** — Deployment → Service → PVC → Ingress → HPA
+5. **Status update** — reads Deployment ready replicas, sets phase and conditions
 
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
+---
 
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
+## RBAC
 
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
+The operator requires the following permissions (generated in `config/rbac/`):
 
-**NOTE:** Run `make help` for more information on all potential `make` targets
+- `appdefinitions` — get, list, watch, create, update, patch, delete
+- `appdefinitions/status` — get, update, patch
+- `apps/deployments` — get, list, watch, create, update, patch, delete
+- `core/services` — get, list, watch, create, update, patch, delete
+- `core/pods` — get, list, watch
+- `networking.k8s.io/ingresses` — get, list, watch, create, update, patch, delete
+- `core/persistentvolumeclaims` — get, list, watch, create, update, patch, delete
+- `autoscaling/horizontalpodautoscalers` — get, list, watch, create, update, patch, delete
 
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+---
 
 ## License
 
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+Copyright 2025. Licensed under the [Apache License, Version 2.0](LICENSE).
