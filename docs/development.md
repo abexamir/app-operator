@@ -19,6 +19,13 @@ make run
 
 The controller reconnects automatically when you restart it. Any AppDefinitions already in the cluster are reconciled on startup.
 
+> **Single source of truth**: if the operator is already deployed in-cluster (e.g. via `kubectl apply -f dist/install.yaml`), scale it down before running locally to avoid two controllers fighting over the same resources:
+> ```sh
+> kubectl scale deployment appoperator-controller-manager -n appoperator-system --replicas=0
+> # run locally, test, then restore:
+> kubectl scale deployment appoperator-controller-manager -n appoperator-system --replicas=1
+> ```
+
 ## Code generation
 
 Run these after changing `api/v1/appdefinition_types.go`:
@@ -83,14 +90,16 @@ AppDefinition CR
 AppDefinitionReconciler  (internal/controller/appdefinition_controller.go)
        │
        ├── reconcileConfigMaps()     → ConfigMap   (one per configMaps[], named <app>-<name>)
-       ├── reconcileSecrets()        → Secret      (one per secrets[], named <app>-<name>)
-       ├── reconcileDeployment()     → Deployment  (init containers, containers, volumes, probes, lifecycle, config-hash annotation, scheduling)
+       ├── reconcileSecrets()        → Secret      (one per inline secrets[]; secretRef entries skipped)
+       ├── reconcileDeployment()     → Deployment  (init containers, containers, volumes, probes,
+       │                                            lifecycle, config-hash annotation, scheduling)
        ├── reconcileService()        → Service     (expose:true ports; serviceType)
-       ├── reconcilePVC()            → PVC         (create; expand if sizeInGi increases)
+       ├── reconcilePVC()            → PVC         (create; expand when sizeInGi increases)
        ├── reconcileIngress()        → Ingress     (per-domain rules and TLS blocks)
        ├── reconcileHPA()            → HPA         (created/deleted based on autoscaling.enabled)
        ├── reconcileServiceMonitor() → ServiceMonitor (skipped gracefully when CRD absent)
-       └── updateStatus()            → status subresource (phase, readyReplicas, Ready/DiskReady/IngressReady/HPAActive conditions)
+       └── updateStatus()            → status subresource (phase, readyReplicas,
+                                       Ready / DiskReady / IngressReady / HPAActive conditions)
 ```
 
 Reconciliation order is intentional: ConfigMaps and Secrets are created before the Deployment so all mounts are available when pods start.
@@ -101,9 +110,43 @@ Reconciliation order is intentional: ConfigMaps and Secrets are created before t
 2. **Deletion guard** — if `DeletionTimestamp` is set, removes finalizer and exits
 3. **Paused guard** — if `spec.paused: true`, sets phase to `Paused` and exits
 4. **Resource reconciliation** — runs the chain above in order
-5. **Status update** — reads Deployment ready replicas, sets phase and conditions
+5. **Status update** — reads Deployment ready replicas, fetches PVC/Ingress/HPA for per-resource conditions
 
 `ctrl.CreateOrUpdate` is used for all resources — the reconcile loop is fully idempotent. The loop also runs every 30 seconds in addition to event-driven triggers, so drift is corrected automatically.
+
+### Init containers
+
+`spec.initContainers[]` maps directly to `podSpec.InitContainers`. Init containers share the same volumes (disk partitions, ConfigMaps, Secrets with `mountPath`) and the same `envFrom` Secret injection (Secrets with `asEnvVars: true`) as the main containers. They do not receive ports or lifecycle hooks.
+
+### Config hash rollout
+
+Whenever inline `configMaps[].data` or `secrets[].data` (inline only, not `secretRef`) changes, a new SHA-256 hash is computed over the sorted keys and values and stored in the pod template annotation `appdefinition.abexamir.me/config-hash`. Kubernetes treats a changed pod template annotation as a pod spec change and performs a rolling restart automatically — no manual rollout needed.
+
+### PVC expansion
+
+When `spec.disk.sizeInGi` increases, `reconcilePVC` patches `pvc.spec.resources.requests.storage` to the new value. The storage class must have `allowVolumeExpansion: true`. The actual filesystem resize is performed by the storage class's CSI driver; until it completes, the `DiskReady` condition shows `bound (Xgi, expanding to Ygi)`. Shrinking is not supported by Kubernetes.
+
+The `DiskReady` condition message always reflects `pvc.status.capacity` (the size actually granted by the provisioner), not `pvc.spec.resources.requests` (the size requested). This distinction matters during an in-progress resize. The PVC is read via `APIReader` (bypasses the informer cache) to avoid a k3s-specific transient state where the cache briefly holds an intermediate capacity value during resize processing.
+
+### External Secret references
+
+A `SecretMount` with `secretRef` set tells the operator to use an existing Secret by name instead of creating one. The operator:
+- Skips Secret creation in `reconcileSecrets` for that entry
+- Routes `envFrom` and volume mounts to the referenced Secret name via `resolvedSecretName()`
+- Does not set an owner reference on the referenced Secret (it is not garbage-collected with the AppDefinition)
+
+This works with any source that creates Kubernetes Secrets: External Secrets Operator, Vault agent sidecar, Sealed Secrets, or plain `kubectl create secret`. The `data` and `secretRef` fields are mutually exclusive and enforced by a CEL validation rule on the CRD — no webhook needed.
+
+### Per-resource status conditions
+
+`updateStatus` sets four conditions on every reconcile pass:
+
+| Condition | Set when | `True` when |
+|---|---|---|
+| `Ready` | Always | `readyReplicas >= desiredReplicas` |
+| `DiskReady` | `spec.disk` is set | PVC phase is `Bound` |
+| `IngressReady` | `spec.domains` is non-empty | Ingress has at least one LoadBalancer address assigned |
+| `HPAActive` | `spec.autoscaling.enabled: true` | HPA resource exists |
 
 ### ServiceMonitor
 
@@ -111,12 +154,13 @@ Reconciliation order is intentional: ConfigMaps and Secrets are created before t
 
 ### CEL validation
 
-Two validation rules are baked into the CRD schema (no admission webhook needed):
+Three validation rules are baked into the CRD schema (no admission webhook needed):
 
 | Rule | Reason |
 |---|---|
 | `disk + replicas > 1` rejected | `ReadWriteOnce` PVCs allow one writer; multiple pods corrupt the volume |
 | `disk + autoscaling.enabled` rejected | HPA would scale past 1, violating the rule above |
+| `secrets[].secretRef + secrets[].data` rejected | The two are mutually exclusive; you either manage the Secret or reference an existing one |
 
 ### Labels
 
@@ -149,9 +193,9 @@ Generated from `// +kubebuilder:rbac:...` markers in `appdefinition_controller.g
 
 ## Known Limitations
 
-- **Secrets in plain text**: `secrets[].data` is stored unencrypted in the AppDefinition spec and in etcd. For production, use [External Secrets Operator](https://external-secrets.io) or [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) to manage values externally and reference them.
+- **Secrets in plain text**: `secrets[].data` is stored unencrypted in the AppDefinition spec and in etcd. For production, use `secretRef` to point to a Secret managed by [External Secrets Operator](https://external-secrets.io) or [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets).
 
-- **PVC shrink is not supported**: the operator will expand the PVC when `disk.sizeInGi` increases (the storage class must have `allowVolumeExpansion: true`), but shrinking is rejected by Kubernetes. To downsize: delete the AppDefinition (which deletes the PVC) and recreate with the smaller size.
+- **PVC shrink is not supported**: the operator expands the PVC when `disk.sizeInGi` increases (storage class must have `allowVolumeExpansion: true`), but Kubernetes rejects shrink requests. To downsize: delete the AppDefinition (which deletes the PVC) and recreate with the smaller size.
 
 - **Single PVC across all containers**: every container in the pod mounts the same disk at every declared partition. There is no per-container disk assignment.
 
@@ -175,9 +219,9 @@ Generated from `// +kubebuilder:rbac:...` markers in `appdefinition_controller.g
 
 - **PodDisruptionBudget**: automatically create a PDB (`minAvailable: 1`) for apps with `replicas > 1` to prevent outages during node drains.
 
-- **Stale child cleanup**: track which ConfigMaps and Secrets were last created by the operator (via a hash annotation) and delete those no longer in the spec.
+- **Stale child cleanup**: track which ConfigMaps and Secrets were last created by the operator and delete those no longer in the spec.
 
-- **Admission webhook**: CEL rules cover basics but a webhook can validate things CEL cannot — image format, port name uniqueness across containers, checking that a referenced StorageClass exists — and return richer errors before any resources are created.
+- **Admission webhook**: CEL rules cover basics but a webhook can validate things CEL cannot — image format, port name uniqueness across containers, checking that a referenced StorageClass or Secret exists — and return richer errors before any resources are created.
 
 - **Log shipping integration**: when `loggingConfig` is present, inject a Promtail scrape annotation on the pod, or create an OTel `PodLogs` object targeting it — same unstructured pattern as `ServiceMonitor`.
 

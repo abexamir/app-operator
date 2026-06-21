@@ -8,6 +8,10 @@ kind: AppDefinition
 metadata:
   name: my-app
 spec:
+  initContainers:
+    - name: migrate
+      image: my-app:latest
+      command: ["./migrate", "--apply"]
   containers:
     - name: web
       image: nginx:1.25-alpine
@@ -41,7 +45,7 @@ The operator reconciles this into a `Deployment`, `Service`, `Ingress`, and `Hor
 kubectl apply -f https://raw.githubusercontent.com/abexamir/app-operator/main/dist/install.yaml
 ```
 
-This installs the CRD, RBAC, and the controller into the `app-operator-system` namespace. The controller image is pulled from `ghcr.io/abexamir/app-operator:latest`.
+This installs the CRD, RBAC, and the controller into the `appoperator-system` namespace. The controller image is pulled from `ghcr.io/abexamir/app-operator:latest`.
 
 ### Specific version
 
@@ -61,18 +65,20 @@ kubectl delete -f https://raw.githubusercontent.com/abexamir/app-operator/main/d
 
 ## What the operator manages
 
-| AppDefinition field | Kubernetes resource created |
+| AppDefinition field | Kubernetes resource |
 |---|---|
 | `containers` | `Deployment` |
+| `initContainers` | Init containers on the `Deployment` (no separate resource) |
 | `ports[].expose: true` | `Service` |
 | `domains[]` | `Ingress` |
 | `disk` | `PersistentVolumeClaim` |
 | `autoscaling.enabled: true` | `HorizontalPodAutoscaler` |
-| `configMaps[]` | `ConfigMap` (operator-owned, inline data) |
-| `secrets[]` | `Secret` (operator-owned, inline data) |
+| `configMaps[]` | `ConfigMap` per entry (operator-owned) |
+| `secrets[]` with `data` | `Secret` per entry (operator-owned) |
+| `secrets[]` with `secretRef` | No resource created — existing Secret is referenced |
 | `monitoringConfig.enabled: true` | `ServiceMonitor` (requires prometheus-operator) |
 
-All child resources are owned by the `AppDefinition` and garbage-collected when it is deleted.
+All operator-owned child resources are garbage-collected when the `AppDefinition` is deleted.
 
 ---
 
@@ -83,13 +89,21 @@ kubectl get appdefinitions              # Phase, Ready, Replicas, Age
 kubectl describe appdefinition my-app   # full Conditions and LastError
 ```
 
-| Field | Values |
+| Field | Values / Notes |
 |---|---|
 | `phase` | `Available` / `Progressing` / `Failed` / `Paused` |
 | `readyReplicas` | Pods with a Ready condition |
 | `replicas` | Desired replica count |
-| `conditions` | `Ready`, `DiskReady`, `IngressReady`, `HPAActive` |
 | `lastError` | Most recent reconciliation error |
+
+### Conditions
+
+| Type | Meaning |
+|---|---|
+| `Ready` | `True` when `readyReplicas >= replicas`. Message: `N/N replicas ready`. |
+| `DiskReady` | Present when `disk` is set. `True` when PVC is Bound. Message: `bound (Xgi)` or `bound (Xgi, expanding to Ygi)` while a resize is in progress. |
+| `IngressReady` | Present when `domains` is set. `True` when the ingress controller assigns an IP or hostname. |
+| `HPAActive` | Present when `autoscaling.enabled: true`. `True` when the HPA exists. Message: `scaling N/M replicas (min X, max Y)`. |
 
 ---
 
@@ -142,7 +156,7 @@ containers:
 
 ### `initContainers`
 
-Containers that run to completion before any main containers start. Useful for migrations, permission setup, or config rendering. Init containers share the same volumes, ConfigMaps, Secrets, and disk mounts as the main containers.
+Containers that run to completion before any main containers start. Useful for DB migrations, permission setup, and config rendering. Init containers share the same volumes, ConfigMaps, Secrets, and disk mounts as main containers but do not expose ports and do not receive lifecycle hooks.
 
 ```yaml
 initContainers:
@@ -219,11 +233,11 @@ disk:
       subPath: logs
 ```
 
-Storage size can be **expanded** by increasing `sizeInGi`. The storage class must have `allowVolumeExpansion: true`. Shrinking is not supported — to downsize, delete the AppDefinition and recreate it.
+Storage size can be **expanded** by increasing `sizeInGi`. The storage class must have `allowVolumeExpansion: true`. While expansion is in progress, `DiskReady` shows `bound (Xgi, expanding to Ygi)`. Shrinking is not supported — to downsize, delete the AppDefinition and recreate it.
 
 ### `configMaps`
 
-Inline ConfigMaps created and owned by the operator. Named `<app>-<name>`, mounted read-only in every container.
+Inline ConfigMaps created and owned by the operator. Named `<app>-<name>`, mounted read-only in every container. Changing `data` triggers an automatic rolling restart via a pod template annotation that tracks a SHA-256 hash of all inline ConfigMap and Secret data.
 
 ```yaml
 configMaps:
@@ -242,38 +256,47 @@ configMaps:
 
 ### `secrets`
 
-Inline Secrets created and owned by the operator. Named `<app>-<name>`. Three modes, combinable:
+Secrets used by the application. Two modes:
+
+**Inline** — the operator creates and owns the Secret, named `<app>-<name>`. Changing `data` triggers an automatic rolling restart (same hash mechanism as ConfigMaps).
+
+**External reference** — the operator mounts or injects an existing Secret without creating, updating, or deleting it. Use this for Secrets managed by External Secrets Operator, Vault agent, Sealed Secrets, or any other external source.
+
+`data` and `secretRef` are mutually exclusive and enforced at the API level.
 
 ```yaml
 secrets:
-  # Mount as a directory of files
+  # Inline: mount as a directory of files
   - name: tls-certs
     mountPath: /etc/tls
     data:
       tls.crt: "..."
       tls.key: "..."
 
-  # Inject all keys as environment variables
+  # Inline: inject all keys as environment variables
   - name: db-credentials
     asEnvVars: true
     data:
       DB_PASSWORD: "super-secret"
       DB_HOST: "postgres.example.com"
 
-  # Both at the same time
+  # Inline: mount and inject at the same time
   - name: api-keys
     mountPath: /etc/secrets
     asEnvVars: true
     data:
       API_KEY: "abc123"
 
-  # Reference a pre-existing Secret — operator mounts/injects it but does not own it
+  # External reference: mount an existing Secret as env vars
   - name: external-db
     asEnvVars: true
-    secretRef: my-existing-db-secret   # must exist in the same namespace
-```
+    secretRef: my-existing-secret    # must exist in the same namespace
 
-`data` and `secretRef` are mutually exclusive and enforced at the API level.
+  # External reference: mount an existing Secret as files
+  - name: vault-tls
+    mountPath: /etc/vault/tls
+    secretRef: vault-agent-tls
+```
 
 > **Warning**: Inline `data` is stored in plain text in the AppDefinition spec and in etcd. For production, prefer `secretRef` pointing to a Secret managed by [External Secrets Operator](https://external-secrets.io) or [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets).
 
@@ -318,7 +341,7 @@ loggingConfig:
 
 ### `lifecycle`
 
-Exec-based `postStart` and `preStop` hooks. Applied to the **first container only** — sidecars often lack a shell and applying hooks to them causes crash loops.
+Exec-based `postStart` and `preStop` hooks. Applied to the **first container only** — sidecars often lack a shell and applying exec hooks to them causes crash loops.
 
 ```yaml
 lifecycle:

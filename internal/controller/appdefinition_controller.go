@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -241,6 +242,8 @@ func computeConfigHash(appDef *v1.AppDefinition) string {
 	}
 
 	h := sha256.New()
+	// hash.Hash.Write (via io.Writer) never returns an error; writes are safe to ignore.
+	write := func(s string) { _, _ = io.WriteString(h, s) }
 
 	cms := make([]v1.ConfigMapMount, len(appDef.Spec.ConfigMaps))
 	copy(cms, appDef.Spec.ConfigMaps)
@@ -251,9 +254,9 @@ func computeConfigHash(appDef *v1.AppDefinition) string {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		fmt.Fprintf(h, "cm:%s\n", cm.Name)
+		write("cm:" + cm.Name + "\n")
 		for _, k := range keys {
-			fmt.Fprintf(h, "%s=%s\n", k, cm.Data[k])
+			write(k + "=" + cm.Data[k] + "\n")
 		}
 	}
 
@@ -269,9 +272,9 @@ func computeConfigHash(appDef *v1.AppDefinition) string {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		fmt.Fprintf(h, "secret:%s\n", sec.Name)
+		write("secret:" + sec.Name + "\n")
 		for _, k := range keys {
-			fmt.Fprintf(h, "%s=%s\n", k, sec.Data[k])
+			write(k + "=" + sec.Data[k] + "\n")
 		}
 	}
 
