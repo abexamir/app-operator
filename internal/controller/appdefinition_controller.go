@@ -44,7 +44,11 @@ var serviceMonitorGVK = schema.GroupVersionKind{
 // AppDefinitionReconciler reconciles a AppDefinition object.
 type AppDefinitionReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	// APIReader bypasses the informer cache and reads directly from the API server.
+	// Used for resources whose status is updated by external controllers (PVC resize),
+	// where the cache can temporarily hold a stale intermediate value.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
 }
 
 // +kubebuilder:rbac:groups=appdefinition.abexamir.me,resources=appdefinitions,verbs=get;list;watch;create;update;patch;delete
@@ -900,12 +904,18 @@ func (r *AppDefinitionReconciler) updateStatus(ctx context.Context, appDef *v1.A
 		pvcStatus := metav1.ConditionFalse
 		pvcReason := "Provisioning"
 		pvcMsg := "PVC is being provisioned"
-		if err := r.Get(ctx, types.NamespacedName{Name: pvcName(appDef.Name), Namespace: appDef.Namespace}, pvc); err == nil {
+		if err := r.APIReader.Get(ctx, types.NamespacedName{Name: pvcName(appDef.Name), Namespace: appDef.Namespace}, pvc); err == nil {
 			if pvc.Status.Phase == corev1.ClaimBound {
 				pvcStatus = metav1.ConditionTrue
 				pvcReason = "Bound"
-				pvcSize := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
-				pvcMsg = fmt.Sprintf("PVC %s is bound (%s)", pvcName(appDef.Name), pvcSize.String())
+				actual := pvc.Status.Capacity[corev1.ResourceStorage]
+				requested := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+				if actual.Cmp(requested) < 0 {
+					// Expansion requested but not yet reflected by the provisioner.
+					pvcMsg = fmt.Sprintf("PVC %s is bound (%s, expanding to %s)", pvcName(appDef.Name), actual.String(), requested.String())
+				} else {
+					pvcMsg = fmt.Sprintf("PVC %s is bound (%s)", pvcName(appDef.Name), actual.String())
+				}
 			} else {
 				pvcMsg = fmt.Sprintf("PVC phase: %s", pvc.Status.Phase)
 			}
