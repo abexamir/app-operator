@@ -161,7 +161,7 @@ type ConfigMapMount struct {
 // Set AsEnvVars to inject every key as an environment variable into all containers.
 // Both MountPath and AsEnvVars may be used at the same time.
 //
-// +kubebuilder:validation:XValidation:rule="!(has(self.secretRef) && self.secretRef != ” && self.data != null)",message="secretRef and data are mutually exclusive; use one or the other"
+// +kubebuilder:validation:XValidation:rule="!(has(self.secretRef) && size(self.secretRef) > 0 && has(self.data))",message="secretRef and data are mutually exclusive"
 type SecretMount struct {
 	Name string `json:"name"`
 	// MountPath mounts the secret as a directory of files into all containers. Optional.
