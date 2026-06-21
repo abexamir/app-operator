@@ -1,0 +1,45 @@
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: disk-demo
+  namespace: apps
+spec:
+  source:
+    type: dockerImage
+    dockerImage:
+      containers:
+        - name: web
+          image: nginx:1.25-alpine
+          ports:
+            - name: http
+              containerPort: 80
+              servicePort: 80
+              protocol: TCP
+              expose: true
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          readinessProbe:
+            type: httpGet
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+  replicas: 1
+  disk:
+    sizeInGi: 1
+    storageClassName: local-path
+    partitions:
+      - mountPath: /usr/share/nginx/html/data
+        subPath: html
+      - mountPath: /var/log/nginx
+        subPath: logs
+  serviceType: LoadBalancer
+  securityContext:
+    runAsNonRoot: false
+    fsGroup: 101

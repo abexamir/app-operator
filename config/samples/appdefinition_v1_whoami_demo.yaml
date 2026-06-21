@@ -1,0 +1,39 @@
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: whoami-demo
+  namespace: apps
+spec:
+  source:
+    type: dockerImage
+    dockerImage:
+      containers:
+        - name: web
+          image: traefik/whoami:latest
+          ports:
+            - name: http
+              containerPort: 80
+              servicePort: 80
+              protocol: TCP
+              expose: true
+          env:
+            - name: WHOAMI_PORT_NUMBER
+              value: "80"
+            - name: APP_ENV
+              value: "development"
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "16Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+          readinessProbe:
+            type: httpGet
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 2
+            periodSeconds: 5
+  replicas: 1
+  serviceType: LoadBalancer
