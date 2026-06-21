@@ -21,64 +21,141 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	appdefinitionv1 "github.com/abexamir/app-operator/api/v1"
 )
 
 var _ = Describe("AppDefinition Controller", func() {
 	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+		const resourceName = "test-app"
+		const namespace = "default"
 
 		ctx := context.Background()
+		namespacedName := types.NamespacedName{Name: resourceName, Namespace: namespace}
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+		minimalSpec := appdefinitionv1.AppDefinitionSpec{
+			Source: appdefinitionv1.SourceSpec{
+				Type: "dockerImage",
+				DockerImage: &appdefinitionv1.DockerImageSource{
+					Containers: []appdefinitionv1.ContainerSpec{
+						{
+							Name:  "web",
+							Image: "nginx:latest",
+							Ports: []appdefinitionv1.PortSpec{
+								{
+									Name:          "http",
+									ContainerPort: 80,
+									ServicePort:   80,
+									Protocol:      "TCP",
+									Expose:        true,
+								},
+							},
+						},
+					},
+				},
+			},
 		}
-		appdefinition := &appdefinitionv1.AppDefinition{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind AppDefinition")
-			err := k8sClient.Get(ctx, typeNamespacedName, appdefinition)
+			appDef := &appdefinitionv1.AppDefinition{}
+			err := k8sClient.Get(ctx, namespacedName, appDef)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &appdefinitionv1.AppDefinition{
+				Expect(k8sClient.Create(ctx, &appdefinitionv1.AppDefinition{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
-						Namespace: "default",
+						Namespace: namespace,
 					},
-					// TODO(user): Specify other spec details if needed.
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+					Spec: minimalSpec,
+				})).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &appdefinitionv1.AppDefinition{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Cleanup the specific resource instance AppDefinition")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &AppDefinitionReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+			appDef := &appdefinitionv1.AppDefinition{}
+			if err := k8sClient.Get(ctx, namespacedName, appDef); err == nil {
+				Expect(k8sClient.Delete(ctx, appDef)).To(Succeed())
 			}
+		})
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
+		// reconcileTwice runs two reconcile passes: the first adds the finalizer,
+		// the second performs the actual resource reconciliation.
+		reconcileTwice := func(r *AppDefinitionReconciler, nn types.NamespacedName) {
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		It("should reconcile without error", func() {
+			r := &AppDefinitionReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			reconcileTwice(r, namespacedName)
+		})
+
+		It("should create a Deployment", func() {
+			r := &AppDefinitionReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			reconcileTwice(r, namespacedName)
+
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, namespacedName, deployment)).To(Succeed())
+			Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
+			Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal("nginx:latest"))
+		})
+
+		It("should create a Service with exposed ports", func() {
+			r := &AppDefinitionReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			reconcileTwice(r, namespacedName)
+
+			service := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, namespacedName, service)).To(Succeed())
+			Expect(service.Spec.Ports).To(HaveLen(1))
+			Expect(service.Spec.Ports[0].Name).To(Equal("http"))
+			Expect(service.Spec.Ports[0].Port).To(Equal(int32(80)))
+		})
+
+		It("should set owner references on child resources", func() {
+			r := &AppDefinitionReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			reconcileTwice(r, namespacedName)
+
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, namespacedName, deployment)).To(Succeed())
+			Expect(deployment.OwnerReferences).To(HaveLen(1))
+			Expect(deployment.OwnerReferences[0].Name).To(Equal(resourceName))
+		})
+
+		It("should add a finalizer on the first reconcile", func() {
+			r := &AppDefinitionReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			appDef := &appdefinitionv1.AppDefinition{}
+			Expect(k8sClient.Get(ctx, namespacedName, appDef)).To(Succeed())
+			Expect(appDef.Finalizers).To(ContainElement(finalizer))
+		})
+
+		It("should skip resource creation when paused", func() {
+			pausedName := types.NamespacedName{Name: "paused-app", Namespace: namespace}
+			pausedSpec := minimalSpec
+			pausedSpec.Paused = true
+			paused := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: "paused-app", Namespace: namespace},
+				Spec:       pausedSpec,
+			}
+			Expect(k8sClient.Create(ctx, paused)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, paused) })
+
+			r := &AppDefinitionReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			// Two reconcile calls: first adds finalizer, second hits Paused guard.
+			reconcileTwice(r, pausedName)
+
+			deployment := &appsv1.Deployment{}
+			err := k8sClient.Get(ctx, pausedName, deployment)
+			Expect(errors.IsNotFound(err)).To(BeTrue())
 		})
 	})
 })
