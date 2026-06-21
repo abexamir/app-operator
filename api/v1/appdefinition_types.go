@@ -66,7 +66,7 @@ type MonitoringConfig struct {
 }
 
 // ---------------------------------------
-// Source (multi-container docker image)
+// Containers
 // ---------------------------------------
 
 type ContainerSpec struct {
@@ -79,16 +79,6 @@ type ContainerSpec struct {
 	ReadinessProbe *Probe                      `json:"readinessProbe,omitempty"`
 	LivenessProbe  *Probe                      `json:"livenessProbe,omitempty"`
 	Resources      corev1.ResourceRequirements `json:"resources,omitempty"`
-}
-
-type DockerImageSource struct {
-	Containers []ContainerSpec `json:"containers"`
-}
-
-type SourceSpec struct {
-	// +kubebuilder:validation:Enum=dockerImage
-	Type        string             `json:"type"` // Only dockerImage for now
-	DockerImage *DockerImageSource `json:"dockerImage,omitempty"`
 }
 
 // ---------------------------------------
@@ -105,21 +95,30 @@ type AutoscalingSpec struct {
 }
 
 // ---------------------------------------
-// Volume mounts
+// Inline ConfigMaps and Secrets
 // ---------------------------------------
 
-// ConfigMapMount mounts a ConfigMap as a directory into all containers.
+// ConfigMapMount defines a ConfigMap whose content is embedded directly in the AppDefinition.
+// The operator creates and owns a ConfigMap named "<appname>-<name>" and mounts it at MountPath
+// in every container.
 type ConfigMapMount struct {
-	Name      string `json:"name"`
-	MountPath string `json:"mountPath"`
-	Optional  bool   `json:"optional,omitempty"`
+	Name      string            `json:"name"`
+	MountPath string            `json:"mountPath"`
+	Data      map[string]string `json:"data"`
 }
 
-// SecretMount mounts a Secret as a directory into all containers.
+// SecretMount defines a Secret whose content is embedded directly in the AppDefinition.
+// The operator creates and owns a Secret named "<appname>-<name>".
+// Set MountPath to mount the secret as a directory of files.
+// Set AsEnvVars to inject every key as an environment variable in all containers.
+// Both options may be used at the same time.
 type SecretMount struct {
-	Name      string `json:"name"`
-	MountPath string `json:"mountPath"`
-	Optional  bool   `json:"optional,omitempty"`
+	Name string `json:"name"`
+	// MountPath mounts the secret as a directory of files into all containers. Optional.
+	MountPath string `json:"mountPath,omitempty"`
+	// AsEnvVars injects all secret keys as environment variables into all containers.
+	AsEnvVars bool              `json:"asEnvVars,omitempty"`
+	Data      map[string]string `json:"data"`
 }
 
 // ---------------------------------------
@@ -149,7 +148,8 @@ type LifecycleSpec struct {
 }
 
 type AppDefinitionSpec struct {
-	Source             SourceSpec                 `json:"source"`
+	// Containers defines the application containers to run.
+	Containers         []ContainerSpec            `json:"containers"`
 	Replicas           *int32                     `json:"replicas,omitempty"`
 	Domains            []DomainSpec               `json:"domains,omitempty"`
 	Disk               *DiskConfig                `json:"disk,omitempty"`
@@ -169,9 +169,11 @@ type AppDefinitionSpec struct {
 	Autoscaling *AutoscalingSpec `json:"autoscaling,omitempty"`
 	// ImagePullSecrets are references to secrets in the same namespace for pulling container images.
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
-	// ConfigMaps to mount as directories into all containers.
+	// ConfigMaps defines inline ConfigMaps created and managed by the operator.
+	// Each entry's data is mounted at MountPath in all containers.
 	ConfigMaps []ConfigMapMount `json:"configMaps,omitempty"`
-	// Secrets to mount as directories into all containers.
+	// Secrets defines inline Secrets created and managed by the operator.
+	// Use MountPath to mount as files and/or AsEnvVars to inject as environment variables.
 	Secrets []SecretMount `json:"secrets,omitempty"`
 }
 
