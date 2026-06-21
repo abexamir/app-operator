@@ -3,9 +3,10 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/go-logr/logr"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -15,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,93 +25,105 @@ import (
 	v1 "github.com/abexamir/app-operator/api/v1"
 )
 
-// AppDefinitionReconciler reconciles a AppDefinition object
+const finalizer = "appdefinition.abexamir.me/finalizer"
+
+// AppDefinitionReconciler reconciles a AppDefinition object.
 type AppDefinitionReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	Log    logr.Logger
 }
 
-//+kubebuilder:rbac:groups=appdefinition.abexamir.me,resources=appdefinitions,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=appdefinition.abexamir.me,resources=appdefinitions/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=appdefinition.abexamir.me,resources=appdefinitions/finalizers,verbs=update
-//+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
-//+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=appdefinition.abexamir.me,resources=appdefinitions,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=appdefinition.abexamir.me,resources=appdefinitions/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=appdefinition.abexamir.me,resources=appdefinitions/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
 func (r *AppDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
-	log.Info("Starting reconciliation", "namespace", req.Namespace, "name", req.Name)
+	logger := log.FromContext(ctx)
 
-	// Fetch the AppDefinition instance
 	appDef := &v1.AppDefinition{}
 	if err := r.Get(ctx, req.NamespacedName, appDef); err != nil {
-		// Handle the case where the resource is not found
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Set up finalizer
-	if !controllerutil.ContainsFinalizer(appDef, "appdefinition.abeaxmir.me/finalizer") {
-		controllerutil.AddFinalizer(appDef, "appdefinition.abeaxmir.me/finalizer")
+	// Register finalizer on first encounter.
+	if !controllerutil.ContainsFinalizer(appDef, finalizer) {
+		controllerutil.AddFinalizer(appDef, finalizer)
 		if err := r.Update(ctx, appDef); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
 		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Handle deletion
+	// Handle deletion.
 	if !appDef.DeletionTimestamp.IsZero() {
 		return r.handleDeletion(ctx, appDef)
 	}
 
-	// Reconcile Deployment
-	if err := r.reconcileDeployment(ctx, appDef); err != nil {
-		log.Error(err, "Failed to reconcile Deployment")
-		return ctrl.Result{}, err
-	}
+	// Run reconciliation and always update status afterwards.
+	reconcileErr := r.reconcileAll(ctx, appDef)
 
-	// Reconcile Service
-	if err := r.reconcileService(ctx, appDef); err != nil {
-		log.Error(err, "Failed to reconcile Service")
-		return ctrl.Result{}, err
-	}
-
-	// Reconcile PVC if disk config is specified
-	if appDef.Spec.Disk != nil {
-		if err := r.reconcilePVC(ctx, appDef); err != nil {
-			log.Error(err, "Failed to reconcile PVC")
-			return ctrl.Result{}, err
+	if statusErr := r.updateStatus(ctx, appDef, reconcileErr); statusErr != nil {
+		logger.Error(statusErr, "Failed to update status")
+		if reconcileErr == nil {
+			return ctrl.Result{}, statusErr
 		}
 	}
 
-	// Reconcile Ingress if domains are specified
-	if len(appDef.Spec.Domains) > 0 {
-		if err := r.reconcileIngress(ctx, appDef); err != nil {
-			log.Error(err, "Failed to reconcile Ingress")
-			return ctrl.Result{}, err
-		}
+	if reconcileErr != nil {
+		return ctrl.Result{}, reconcileErr
 	}
 
-	return ctrl.Result{RequeueAfter: time.Minute}, nil
+	logger.Info("Reconciliation complete")
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
 func (r *AppDefinitionReconciler) handleDeletion(ctx context.Context, appDef *v1.AppDefinition) (ctrl.Result, error) {
-	// Remove finalizer
-	controllerutil.RemoveFinalizer(appDef, "appdefinition.abeaxmir.me/finalizer")
+	controllerutil.RemoveFinalizer(appDef, finalizer)
 	if err := r.Update(ctx, appDef); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
 	}
 	return ctrl.Result{}, nil
 }
 
-func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDef *v1.AppDefinition) error {
-	log := r.Log.WithValues("appdefinition", appDef.Name, "namespace", appDef.Namespace)
+func (r *AppDefinitionReconciler) reconcileAll(ctx context.Context, appDef *v1.AppDefinition) error {
+	if appDef.Spec.Paused {
+		logger := log.FromContext(ctx)
+		logger.Info("AppDefinition is paused, skipping reconciliation")
+		return nil
+	}
 
-	// Create the deployment object
+	if err := r.reconcileDeployment(ctx, appDef); err != nil {
+		return err
+	}
+	if err := r.reconcileService(ctx, appDef); err != nil {
+		return err
+	}
+	if appDef.Spec.Disk != nil {
+		if err := r.reconcilePVC(ctx, appDef); err != nil {
+			return err
+		}
+	}
+	if len(appDef.Spec.Domains) > 0 {
+		if err := r.reconcileIngress(ctx, appDef); err != nil {
+			return err
+		}
+	}
+	return r.reconcileHPA(ctx, appDef)
+}
+
+// ----------------------------------------------------------------
+// Deployment
+// ----------------------------------------------------------------
+
+func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDef *v1.AppDefinition) error {
+	logger := log.FromContext(ctx)
+
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      appDef.Name,
@@ -117,182 +131,217 @@ func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDe
 		},
 	}
 
-	// Create or update the deployment
 	op, err := ctrl.CreateOrUpdate(ctx, r.Client, deployment, func() error {
-		// Set replicas
 		replicas := int32(1)
 		if appDef.Spec.Replicas != nil {
 			replicas = *appDef.Spec.Replicas
 		}
 
-		// Set labels and annotations
-		deployment.Labels = map[string]string{
-			"app.kubernetes.io/name":       appDef.Name,
-			"app.kubernetes.io/instance":   appDef.Name,
-			"app.kubernetes.io/managed-by": "app-operator",
-		}
-
-		// Set deployment spec
+		deployment.Labels = standardLabels(appDef.Name)
 		deployment.Spec = appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{
-					"app.kubernetes.io/name": appDef.Name,
-				},
+				MatchLabels: selectorLabels(appDef.Name),
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"app.kubernetes.io/name": appDef.Name,
-					},
+					Labels: selectorLabels(appDef.Name),
 				},
-				Spec: corev1.PodSpec{
-					Containers: make([]corev1.Container, 0),
-				},
+				Spec: corev1.PodSpec{},
 			},
 		}
 
-		// Set pod security context if specified
+		podSpec := &deployment.Spec.Template.Spec
+
 		if appDef.Spec.SecurityContext != nil {
-			deployment.Spec.Template.Spec.SecurityContext = appDef.Spec.SecurityContext
+			podSpec.SecurityContext = appDef.Spec.SecurityContext
 		}
-
-		// Set node selector if specified
-		if appDef.Spec.NodeSelector != nil {
-			deployment.Spec.Template.Spec.NodeSelector = appDef.Spec.NodeSelector
+		if len(appDef.Spec.NodeSelector) > 0 {
+			podSpec.NodeSelector = appDef.Spec.NodeSelector
 		}
-
-		// Set tolerations if specified
-		if appDef.Spec.Tolerations != nil {
-			deployment.Spec.Template.Spec.Tolerations = appDef.Spec.Tolerations
+		if len(appDef.Spec.Tolerations) > 0 {
+			podSpec.Tolerations = appDef.Spec.Tolerations
 		}
-
-		// Set affinity if specified
 		if appDef.Spec.Affinity != nil {
-			deployment.Spec.Template.Spec.Affinity = appDef.Spec.Affinity
+			podSpec.Affinity = appDef.Spec.Affinity
+		}
+		if len(appDef.Spec.ImagePullSecrets) > 0 {
+			podSpec.ImagePullSecrets = appDef.Spec.ImagePullSecrets
 		}
 
-		// Add containers based on source type
-		switch appDef.Spec.Source.Type {
-		case "dockerImage":
-			if appDef.Spec.Source.DockerImage == nil {
-				return fmt.Errorf("dockerImage source type specified but no DockerImage config provided")
-			}
-			for _, container := range appDef.Spec.Source.DockerImage.Containers {
-				// Create container spec
-				containerSpec := corev1.Container{
-					Name:  container.Name,
-					Image: container.Image,
-				}
+		podSpec.Volumes = buildVolumes(appDef)
 
-				// Set command and args if specified
-				if len(container.Command) > 0 {
-					containerSpec.Command = container.Command
-				}
-				if len(container.Args) > 0 {
-					containerSpec.Args = container.Args
-				}
-
-				// Set environment variables
-				if len(container.Env) > 0 {
-					containerSpec.Env = container.Env
-				}
-
-				// Set ports
-				if len(container.Ports) > 0 {
-					containerSpec.Ports = make([]corev1.ContainerPort, 0, len(container.Ports))
-					for _, port := range container.Ports {
-						containerSpec.Ports = append(containerSpec.Ports, corev1.ContainerPort{
-							Name:          port.Name,
-							ContainerPort: port.ContainerPort,
-							Protocol:      corev1.Protocol(port.Protocol),
-						})
-					}
-				}
-
-				// Set probes
-				if container.ReadinessProbe != nil {
-					containerSpec.ReadinessProbe = &corev1.Probe{
-						InitialDelaySeconds: container.ReadinessProbe.InitialDelaySeconds,
-						PeriodSeconds:       container.ReadinessProbe.PeriodSeconds,
-						TimeoutSeconds:      container.ReadinessProbe.TimeoutSeconds,
-						FailureThreshold:    container.ReadinessProbe.FailureThreshold,
-						SuccessThreshold:    container.ReadinessProbe.SuccessThreshold,
-					}
-					if container.ReadinessProbe.HTTPGet != nil {
-						containerSpec.ReadinessProbe.HTTPGet = container.ReadinessProbe.HTTPGet
-					}
-					if container.ReadinessProbe.TCPSocket != nil {
-						containerSpec.ReadinessProbe.TCPSocket = container.ReadinessProbe.TCPSocket
-					}
-					if container.ReadinessProbe.Exec != nil {
-						containerSpec.ReadinessProbe.Exec = container.ReadinessProbe.Exec
-					}
-				}
-
-				if container.LivenessProbe != nil {
-					containerSpec.LivenessProbe = &corev1.Probe{
-						InitialDelaySeconds: container.LivenessProbe.InitialDelaySeconds,
-						PeriodSeconds:       container.LivenessProbe.PeriodSeconds,
-						TimeoutSeconds:      container.LivenessProbe.TimeoutSeconds,
-						FailureThreshold:    container.LivenessProbe.FailureThreshold,
-						SuccessThreshold:    container.LivenessProbe.SuccessThreshold,
-					}
-					if container.LivenessProbe.HTTPGet != nil {
-						containerSpec.LivenessProbe.HTTPGet = container.LivenessProbe.HTTPGet
-					}
-					if container.LivenessProbe.TCPSocket != nil {
-						containerSpec.LivenessProbe.TCPSocket = container.LivenessProbe.TCPSocket
-					}
-					if container.LivenessProbe.Exec != nil {
-						containerSpec.LivenessProbe.Exec = container.LivenessProbe.Exec
-					}
-				}
-
-				// Set resources if specified
-				if len(container.Resources.Requests) > 0 || len(container.Resources.Limits) > 0 {
-					containerSpec.Resources = container.Resources
-				}
-
-				// Add container to pod spec
-				deployment.Spec.Template.Spec.Containers = append(deployment.Spec.Template.Spec.Containers, containerSpec)
-			}
-
-		case "gitRepo":
-			// TODO: Implement Git repo source type
-			return fmt.Errorf("gitRepo source type not yet implemented")
-
-		case "helmChart":
-			// TODO: Implement Helm chart source type
-			return fmt.Errorf("helmChart source type not yet implemented")
-
-		default:
-			return fmt.Errorf("unsupported source type: %s", appDef.Spec.Source.Type)
+		if appDef.Spec.Source.DockerImage == nil {
+			return fmt.Errorf("dockerImage source type specified but no dockerImage config provided")
 		}
+		podSpec.Containers = buildContainers(appDef)
 
-		// Set owner reference
-		if err := ctrl.SetControllerReference(appDef, deployment, r.Scheme); err != nil {
-			return err
-		}
-
-		return nil
+		return ctrl.SetControllerReference(appDef, deployment, r.Scheme)
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to create/update deployment: %w", err)
+		return fmt.Errorf("failed to reconcile Deployment: %w", err)
 	}
-
 	if op != controllerutil.OperationResultNone {
-		log.Info("Deployment reconciled", "operation", op)
+		logger.Info("Deployment reconciled", "operation", op)
 	}
-
 	return nil
 }
 
-func (r *AppDefinitionReconciler) reconcileService(ctx context.Context, appDef *v1.AppDefinition) error {
-	log := r.Log.WithValues("appdefinition", appDef.Name, "namespace", appDef.Namespace)
+func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
+	count := len(appDef.Spec.ConfigMaps) + len(appDef.Spec.Secrets)
+	if appDef.Spec.Disk != nil {
+		count++
+	}
+	volumes := make([]corev1.Volume, 0, count)
 
-	// Create the service object
+	if appDef.Spec.Disk != nil {
+		volumes = append(volumes, corev1.Volume{
+			Name: "app-disk",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: pvcName(appDef.Name),
+				},
+			},
+		})
+	}
+
+	for _, cm := range appDef.Spec.ConfigMaps {
+		optional := cm.Optional
+		volumes = append(volumes, corev1.Volume{
+			Name: "cm-" + cm.Name,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: cm.Name},
+					Optional:             &optional,
+				},
+			},
+		})
+	}
+
+	for _, sec := range appDef.Spec.Secrets {
+		optional := sec.Optional
+		volumes = append(volumes, corev1.Volume{
+			Name: "secret-" + sec.Name,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: sec.Name,
+					Optional:   &optional,
+				},
+			},
+		})
+	}
+
+	return volumes
+}
+
+func buildContainers(appDef *v1.AppDefinition) []corev1.Container {
+	containers := make([]corev1.Container, 0, len(appDef.Spec.Source.DockerImage.Containers))
+	for _, c := range appDef.Spec.Source.DockerImage.Containers {
+		containers = append(containers, buildContainer(appDef, c))
+	}
+	return containers
+}
+
+func buildContainer(appDef *v1.AppDefinition, c v1.ContainerSpec) corev1.Container {
+	container := corev1.Container{
+		Name:    c.Name,
+		Image:   c.Image,
+		Command: c.Command,
+		Args:    c.Args,
+		Env:     c.Env,
+	}
+
+	for _, p := range c.Ports {
+		proto := corev1.Protocol(p.Protocol)
+		if proto == "" {
+			proto = corev1.ProtocolTCP
+		}
+		container.Ports = append(container.Ports, corev1.ContainerPort{
+			Name:          p.Name,
+			ContainerPort: p.ContainerPort,
+			Protocol:      proto,
+		})
+	}
+
+	if c.ReadinessProbe != nil {
+		container.ReadinessProbe = buildProbe(c.ReadinessProbe)
+	}
+	if c.LivenessProbe != nil {
+		container.LivenessProbe = buildProbe(c.LivenessProbe)
+	}
+	if len(c.Resources.Requests) > 0 || len(c.Resources.Limits) > 0 {
+		container.Resources = c.Resources
+	}
+
+	// Apply pod-level lifecycle hooks to every container.
+	if appDef.Spec.Lifecycle != nil {
+		lc := &corev1.Lifecycle{}
+		if appDef.Spec.Lifecycle.PostStart != nil && appDef.Spec.Lifecycle.PostStart.Exec != nil {
+			lc.PostStart = &corev1.LifecycleHandler{Exec: appDef.Spec.Lifecycle.PostStart.Exec}
+		}
+		if appDef.Spec.Lifecycle.PreStop != nil && appDef.Spec.Lifecycle.PreStop.Exec != nil {
+			lc.PreStop = &corev1.LifecycleHandler{Exec: appDef.Spec.Lifecycle.PreStop.Exec}
+		}
+		if lc.PostStart != nil || lc.PreStop != nil {
+			container.Lifecycle = lc
+		}
+	}
+
+	// Volume mounts: disk partitions, configmaps, secrets.
+	mountCount := len(appDef.Spec.ConfigMaps) + len(appDef.Spec.Secrets)
+	if appDef.Spec.Disk != nil {
+		mountCount += len(appDef.Spec.Disk.Partitions)
+	}
+	mounts := make([]corev1.VolumeMount, 0, mountCount)
+	if appDef.Spec.Disk != nil {
+		for _, p := range appDef.Spec.Disk.Partitions {
+			mounts = append(mounts, corev1.VolumeMount{
+				Name:      "app-disk",
+				MountPath: p.MountPath,
+				SubPath:   p.SubPath,
+			})
+		}
+	}
+	for _, cm := range appDef.Spec.ConfigMaps {
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      "cm-" + cm.Name,
+			MountPath: cm.MountPath,
+		})
+	}
+	for _, sec := range appDef.Spec.Secrets {
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      "secret-" + sec.Name,
+			MountPath: sec.MountPath,
+		})
+	}
+	container.VolumeMounts = mounts
+
+	return container
+}
+
+func buildProbe(p *v1.Probe) *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet:   p.HTTPGet,
+			TCPSocket: p.TCPSocket,
+			Exec:      p.Exec,
+		},
+		InitialDelaySeconds: p.InitialDelaySeconds,
+		PeriodSeconds:       p.PeriodSeconds,
+		TimeoutSeconds:      p.TimeoutSeconds,
+		FailureThreshold:    p.FailureThreshold,
+		SuccessThreshold:    p.SuccessThreshold,
+	}
+}
+
+// ----------------------------------------------------------------
+// Service
+// ----------------------------------------------------------------
+
+func (r *AppDefinitionReconciler) reconcileService(ctx context.Context, appDef *v1.AppDefinition) error {
+	logger := log.FromContext(ctx)
+
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      appDef.Name,
@@ -300,167 +349,101 @@ func (r *AppDefinitionReconciler) reconcileService(ctx context.Context, appDef *
 		},
 	}
 
-	// Create or update the service
 	op, err := ctrl.CreateOrUpdate(ctx, r.Client, service, func() error {
-		// Set labels and annotations
-		service.Labels = map[string]string{
-			"app.kubernetes.io/name":       appDef.Name,
-			"app.kubernetes.io/instance":   appDef.Name,
-			"app.kubernetes.io/managed-by": "app-operator",
-		}
+		service.Labels = standardLabels(appDef.Name)
 
-		// Set service type
 		serviceType := corev1.ServiceTypeClusterIP
 		if appDef.Spec.ServiceType != "" {
 			serviceType = appDef.Spec.ServiceType
 		}
 		service.Spec.Type = serviceType
+		service.Spec.Selector = selectorLabels(appDef.Name)
 
-		// Set selector
-		service.Spec.Selector = map[string]string{
-			"app.kubernetes.io/name": appDef.Name,
-		}
-
-		// Add ports based on container specs
-		service.Spec.Ports = make([]corev1.ServicePort, 0)
-		if appDef.Spec.Source.Type == "dockerImage" && appDef.Spec.Source.DockerImage != nil {
+		service.Spec.Ports = nil
+		if appDef.Spec.Source.DockerImage != nil {
 			for _, container := range appDef.Spec.Source.DockerImage.Containers {
 				for _, port := range container.Ports {
-					if port.Expose {
-						servicePort := corev1.ServicePort{
-							Name:       port.Name,
-							Port:       port.ServicePort,
-							TargetPort: intstr.FromInt32(port.ContainerPort),
-							Protocol:   corev1.Protocol(port.Protocol),
-						}
-						service.Spec.Ports = append(service.Spec.Ports, servicePort)
+					if !port.Expose {
+						continue
 					}
+					proto := corev1.Protocol(port.Protocol)
+					if proto == "" {
+						proto = corev1.ProtocolTCP
+					}
+					service.Spec.Ports = append(service.Spec.Ports, corev1.ServicePort{
+						Name:       port.Name,
+						Port:       port.ServicePort,
+						TargetPort: intstr.FromInt32(port.ContainerPort),
+						Protocol:   proto,
+					})
 				}
 			}
 		}
 
-		// Set owner reference
-		if err := ctrl.SetControllerReference(appDef, service, r.Scheme); err != nil {
-			return err
-		}
-
-		return nil
+		return ctrl.SetControllerReference(appDef, service, r.Scheme)
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to create/update service: %w", err)
+		return fmt.Errorf("failed to reconcile Service: %w", err)
 	}
-
 	if op != controllerutil.OperationResultNone {
-		log.Info("Service reconciled", "operation", op)
+		logger.Info("Service reconciled", "operation", op)
 	}
-
 	return nil
 }
 
+// ----------------------------------------------------------------
+// PersistentVolumeClaim
+// ----------------------------------------------------------------
+
 func (r *AppDefinitionReconciler) reconcilePVC(ctx context.Context, appDef *v1.AppDefinition) error {
-	log := r.Log.WithValues("appdefinition", appDef.Name, "namespace", appDef.Namespace)
+	logger := log.FromContext(ctx)
 
-	if appDef.Spec.Disk == nil {
-		return nil
-	}
-
-	// Create the PVC object
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-disk", appDef.Name),
+			Name:      pvcName(appDef.Name),
 			Namespace: appDef.Namespace,
 		},
 	}
 
-	// Create or update the PVC
 	op, err := ctrl.CreateOrUpdate(ctx, r.Client, pvc, func() error {
-		// Set labels and annotations
-		pvc.Labels = map[string]string{
-			"app.kubernetes.io/name":       appDef.Name,
-			"app.kubernetes.io/instance":   appDef.Name,
-			"app.kubernetes.io/managed-by": "app-operator",
-		}
+		pvc.Labels = standardLabels(appDef.Name)
 
-		// Set PVC spec
-		pvc.Spec = corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{
-				corev1.ReadWriteOnce,
-			},
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: resource.MustParse(fmt.Sprintf("%dGi", appDef.Spec.Disk.SizeInGi)),
+		// PVC storage is immutable after creation; only set spec when creating.
+		if pvc.ResourceVersion == "" {
+			storageClass := appDef.Spec.Disk.StorageClassName
+			pvc.Spec = corev1.PersistentVolumeClaimSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				Resources: corev1.VolumeResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceStorage: resource.MustParse(
+							fmt.Sprintf("%dGi", appDef.Spec.Disk.SizeInGi),
+						),
+					},
 				},
-			},
+				StorageClassName: &storageClass,
+			}
 		}
 
-		// Set storage class if specified
-		if appDef.Spec.Disk.StorageClassName != "" {
-			pvc.Spec.StorageClassName = &appDef.Spec.Disk.StorageClassName
-		}
-
-		// Set owner reference
-		if err := ctrl.SetControllerReference(appDef, pvc, r.Scheme); err != nil {
-			return err
-		}
-
-		return nil
+		return ctrl.SetControllerReference(appDef, pvc, r.Scheme)
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to create/update PVC: %w", err)
+		return fmt.Errorf("failed to reconcile PVC: %w", err)
 	}
-
 	if op != controllerutil.OperationResultNone {
-		log.Info("PVC reconciled", "operation", op)
+		logger.Info("PVC reconciled", "operation", op)
 	}
-
-	// Update the deployment to include the volume
-	deployment := &appsv1.Deployment{}
-	if err := r.Get(ctx, types.NamespacedName{Name: appDef.Name, Namespace: appDef.Namespace}, deployment); err != nil {
-		return fmt.Errorf("failed to get deployment: %w", err)
-	}
-
-	// Add volume to pod spec
-	volume := corev1.Volume{
-		Name: "app-disk",
-		VolumeSource: corev1.VolumeSource{
-			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-				ClaimName: pvc.Name,
-			},
-		},
-	}
-	deployment.Spec.Template.Spec.Volumes = append(deployment.Spec.Template.Spec.Volumes, volume)
-
-	// Add volume mounts to containers
-	for i := range deployment.Spec.Template.Spec.Containers {
-		container := &deployment.Spec.Template.Spec.Containers[i]
-		for _, partition := range appDef.Spec.Disk.Partitions {
-			volumeMount := corev1.VolumeMount{
-				Name:      "app-disk",
-				MountPath: partition.MountPath,
-				SubPath:   partition.SubPath,
-			}
-			container.VolumeMounts = append(container.VolumeMounts, volumeMount)
-		}
-	}
-
-	// Update the deployment
-	if err := r.Update(ctx, deployment); err != nil {
-		return fmt.Errorf("failed to update deployment with volume mounts: %w", err)
-	}
-
 	return nil
 }
 
+// ----------------------------------------------------------------
+// Ingress
+// ----------------------------------------------------------------
+
 func (r *AppDefinitionReconciler) reconcileIngress(ctx context.Context, appDef *v1.AppDefinition) error {
-	log := r.Log.WithValues("appdefinition", appDef.Name, "namespace", appDef.Namespace)
+	logger := log.FromContext(ctx)
 
-	if len(appDef.Spec.Domains) == 0 {
-		return nil
-	}
-
-	// Create the ingress object
 	ingress := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      appDef.Name,
@@ -468,90 +451,225 @@ func (r *AppDefinitionReconciler) reconcileIngress(ctx context.Context, appDef *
 		},
 	}
 
-	// Create or update the ingress
 	op, err := ctrl.CreateOrUpdate(ctx, r.Client, ingress, func() error {
-		// Set labels and annotations
-		ingress.Labels = map[string]string{
-			"app.kubernetes.io/name":       appDef.Name,
-			"app.kubernetes.io/instance":   appDef.Name,
-			"app.kubernetes.io/managed-by": "app-operator",
-		}
+		ingress.Labels = standardLabels(appDef.Name)
 
-		// Set ingress annotations
+		// Merge global ingress annotations.
 		ingress.Annotations = make(map[string]string)
-		if appDef.Spec.IngressAnnotations != nil {
-			for k, v := range appDef.Spec.IngressAnnotations {
-				ingress.Annotations[k] = v
-			}
+		for k, v := range appDef.Spec.IngressAnnotations {
+			ingress.Annotations[k] = v
 		}
-
-		// Set ingress class if specified
 		if appDef.Spec.IngressClass != "" {
 			ingress.Annotations["kubernetes.io/ingress.class"] = appDef.Spec.IngressClass
 		}
 
-		// Configure TLS if enabled
-		var tlsHosts []string
+		// Build TLS blocks — one entry per TLS-enabled domain with its own secret.
+		ingress.Spec.TLS = nil
 		for _, domain := range appDef.Spec.Domains {
-			if domain.TLS {
-				tlsHosts = append(tlsHosts, domain.Name)
+			if !domain.TLS {
+				continue
 			}
-		}
-		if len(tlsHosts) > 0 {
-			ingress.Spec.TLS = []networkingv1.IngressTLS{
-				{
-					Hosts: tlsHosts,
-				},
+			secretName := domain.SecretName
+			if secretName == "" {
+				secretName = tlsSecretName(appDef.Name, domain.Name)
+			}
+			ingress.Spec.TLS = append(ingress.Spec.TLS, networkingv1.IngressTLS{
+				Hosts:      []string{domain.Name},
+				SecretName: secretName,
+			})
+			// Per-domain cert-manager issuer annotation.
+			if domain.CertIssuer != "" {
+				ingress.Annotations["cert-manager.io/cluster-issuer"] = domain.CertIssuer
 			}
 		}
 
-		// Configure rules
-		ingress.Spec.Rules = make([]networkingv1.IngressRule, 0, len(appDef.Spec.Domains))
+		// Build rules.
+		pathType := networkingv1.PathTypePrefix
+		ingress.Spec.Rules = nil
 		for _, domain := range appDef.Spec.Domains {
-			rule := networkingv1.IngressRule{
+			portName := domain.PortName
+			if portName == "" {
+				portName = "http"
+			}
+			path := domain.Path
+			if path == "" {
+				path = "/"
+			}
+			ingress.Spec.Rules = append(ingress.Spec.Rules, networkingv1.IngressRule{
 				Host: domain.Name,
 				IngressRuleValue: networkingv1.IngressRuleValue{
 					HTTP: &networkingv1.HTTPIngressRuleValue{
 						Paths: []networkingv1.HTTPIngressPath{
 							{
-								Path:     domain.Path,
-								PathType: &[]networkingv1.PathType{networkingv1.PathTypePrefix}[0],
+								Path:     path,
+								PathType: &pathType,
 								Backend: networkingv1.IngressBackend{
 									Service: &networkingv1.IngressServiceBackend{
 										Name: appDef.Name,
-										Port: networkingv1.ServiceBackendPort{
-											Name: "http",
-										},
+										Port: networkingv1.ServiceBackendPort{Name: portName},
 									},
 								},
 							},
 						},
 					},
 				},
-			}
-			ingress.Spec.Rules = append(ingress.Spec.Rules, rule)
+			})
 		}
 
-		// Set owner reference
-		if err := ctrl.SetControllerReference(appDef, ingress, r.Scheme); err != nil {
-			return err
-		}
-
-		return nil
+		return ctrl.SetControllerReference(appDef, ingress, r.Scheme)
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to create/update ingress: %w", err)
+		return fmt.Errorf("failed to reconcile Ingress: %w", err)
 	}
-
 	if op != controllerutil.OperationResultNone {
-		log.Info("Ingress reconciled", "operation", op)
+		logger.Info("Ingress reconciled", "operation", op)
 	}
-
 	return nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
+// ----------------------------------------------------------------
+// HorizontalPodAutoscaler
+// ----------------------------------------------------------------
+
+func (r *AppDefinitionReconciler) reconcileHPA(ctx context.Context, appDef *v1.AppDefinition) error {
+	logger := log.FromContext(ctx)
+
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      appDef.Name,
+			Namespace: appDef.Namespace,
+		},
+	}
+
+	if appDef.Spec.Autoscaling == nil || !appDef.Spec.Autoscaling.Enabled {
+		if err := r.Delete(ctx, hpa); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete HPA: %w", err)
+		}
+		return nil
+	}
+
+	op, err := ctrl.CreateOrUpdate(ctx, r.Client, hpa, func() error {
+		hpa.Labels = standardLabels(appDef.Name)
+
+		as := appDef.Spec.Autoscaling
+		hpa.Spec = autoscalingv2.HorizontalPodAutoscalerSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       appDef.Name,
+			},
+			MinReplicas: as.MinReplicas,
+			MaxReplicas: as.MaxReplicas,
+		}
+
+		hpa.Spec.Metrics = nil
+		if as.TargetCPUUtilizationPercentage != nil {
+			hpa.Spec.Metrics = append(hpa.Spec.Metrics, autoscalingv2.MetricSpec{
+				Type: autoscalingv2.ResourceMetricSourceType,
+				Resource: &autoscalingv2.ResourceMetricSource{
+					Name: corev1.ResourceCPU,
+					Target: autoscalingv2.MetricTarget{
+						Type:               autoscalingv2.UtilizationMetricType,
+						AverageUtilization: as.TargetCPUUtilizationPercentage,
+					},
+				},
+			})
+		}
+		if as.TargetMemoryUtilizationPercentage != nil {
+			hpa.Spec.Metrics = append(hpa.Spec.Metrics, autoscalingv2.MetricSpec{
+				Type: autoscalingv2.ResourceMetricSourceType,
+				Resource: &autoscalingv2.ResourceMetricSource{
+					Name: corev1.ResourceMemory,
+					Target: autoscalingv2.MetricTarget{
+						Type:               autoscalingv2.UtilizationMetricType,
+						AverageUtilization: as.TargetMemoryUtilizationPercentage,
+					},
+				},
+			})
+		}
+
+		return ctrl.SetControllerReference(appDef, hpa, r.Scheme)
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to reconcile HPA: %w", err)
+	}
+	if op != controllerutil.OperationResultNone {
+		logger.Info("HPA reconciled", "operation", op)
+	}
+	return nil
+}
+
+// ----------------------------------------------------------------
+// Status
+// ----------------------------------------------------------------
+
+func (r *AppDefinitionReconciler) updateStatus(ctx context.Context, appDef *v1.AppDefinition, reconcileErr error) error {
+	appDef.Status.ObservedGeneration = appDef.Generation
+
+	desiredReplicas := int32(1)
+	if appDef.Spec.Replicas != nil {
+		desiredReplicas = *appDef.Spec.Replicas
+	}
+	appDef.Status.Replicas = desiredReplicas
+
+	// Fetch deployment to get ready replica count.
+	deployment := &appsv1.Deployment{}
+	deploymentFound := true
+	if err := r.Get(ctx, types.NamespacedName{Name: appDef.Name, Namespace: appDef.Namespace}, deployment); err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to get Deployment for status: %w", err)
+		}
+		deploymentFound = false
+	}
+	if deploymentFound {
+		appDef.Status.ReadyReplicas = deployment.Status.ReadyReplicas
+	}
+
+	now := metav1.Now()
+	ready := metav1.ConditionFalse
+	readyReason := "Progressing"
+	readyMsg := fmt.Sprintf("%d/%d replicas ready", appDef.Status.ReadyReplicas, desiredReplicas)
+
+	switch {
+	case appDef.Spec.Paused:
+		appDef.Status.Phase = "Paused"
+		readyReason = "Paused"
+		readyMsg = "Reconciliation is paused"
+	case reconcileErr != nil:
+		appDef.Status.Phase = "Failed"
+		appDef.Status.LastError = reconcileErr.Error()
+		readyReason = "ReconcileError"
+		readyMsg = reconcileErr.Error()
+	case deploymentFound && deployment.Status.ReadyReplicas >= desiredReplicas:
+		appDef.Status.Phase = "Available"
+		appDef.Status.LastError = ""
+		ready = metav1.ConditionTrue
+		readyReason = "DeploymentAvailable"
+	default:
+		appDef.Status.Phase = "Progressing"
+	}
+
+	apimeta.SetStatusCondition(&appDef.Status.Conditions, metav1.Condition{
+		Type:               v1.ConditionTypeReady,
+		Status:             ready,
+		Reason:             readyReason,
+		Message:            readyMsg,
+		LastTransitionTime: now,
+		ObservedGeneration: appDef.Generation,
+	})
+
+	if err := r.Status().Update(ctx, appDef); err != nil {
+		return fmt.Errorf("failed to update AppDefinition status: %w", err)
+	}
+	return nil
+}
+
+// ----------------------------------------------------------------
+// Manager setup
+// ----------------------------------------------------------------
+
 func (r *AppDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1.AppDefinition{}).
@@ -559,5 +677,46 @@ func (r *AppDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&networkingv1.Ingress{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
 		Complete(r)
+}
+
+// ----------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------
+
+func standardLabels(name string) map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/name":       name,
+		"app.kubernetes.io/instance":   name,
+		"app.kubernetes.io/managed-by": "app-operator",
+	}
+}
+
+func selectorLabels(name string) map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/name": name,
+	}
+}
+
+func pvcName(appName string) string {
+	return appName + "-disk"
+}
+
+// tlsSecretName generates a DNS-safe TLS secret name from the app name and domain.
+func tlsSecretName(appName, domain string) string {
+	safe := sanitizeDNS(domain)
+	return fmt.Sprintf("%s-%s-tls", appName, safe)
+}
+
+func sanitizeDNS(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
