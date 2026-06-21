@@ -1,0 +1,51 @@
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: security-context-demo
+  namespace: apps
+  annotations:
+    app.kubernetes.io/description: "Hardened pod security context: non-root user, read-only root filesystem capability via env, fsGroup for volume ownership."
+spec:
+  containers:
+    - name: web
+      image: nginxinc/nginx-unprivileged:1.25-alpine
+      ports:
+        - name: http
+          containerPort: 8080
+          servicePort: 8080
+          protocol: TCP
+          expose: true
+      env:
+        - name: NGINX_PORT
+          value: "8080"
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "64Mi"
+        limits:
+          cpu: "200m"
+          memory: "128Mi"
+      readinessProbe:
+        type: httpGet
+        httpGet:
+          path: /
+          port: 8080
+        initialDelaySeconds: 3
+        periodSeconds: 5
+      livenessProbe:
+        type: httpGet
+        httpGet:
+          path: /
+          port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 15
+
+  replicas: 2
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 101   # nginx group in nginxinc/nginx-unprivileged
+    runAsGroup: 101
+    fsGroup: 101     # ensures mounted volumes are group-owned by 101
+
+  serviceType: LoadBalancer

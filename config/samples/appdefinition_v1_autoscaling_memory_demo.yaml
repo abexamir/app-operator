@@ -1,0 +1,43 @@
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: autoscaling-memory-demo
+  namespace: apps
+  annotations:
+    app.kubernetes.io/description: "HPA scaling on both CPU and memory utilization simultaneously."
+spec:
+  containers:
+    - name: web
+      image: nginx:1.25-alpine
+      ports:
+        - name: http
+          containerPort: 80
+          servicePort: 80
+          protocol: TCP
+          expose: true
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "512Mi"
+      readinessProbe:
+        type: httpGet
+        httpGet:
+          path: /
+          port: 80
+        initialDelaySeconds: 3
+        periodSeconds: 5
+  replicas: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    # Scale out when CPU exceeds 60% OR memory exceeds 70%.
+    # Requests must be set on containers for memory-based HPA to work.
+    targetCPUUtilizationPercentage: 60
+    targetMemoryUtilizationPercentage: 70
+  serviceType: LoadBalancer
+  securityContext:
+    runAsNonRoot: false

@@ -1,0 +1,59 @@
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: scheduling-demo
+  namespace: apps
+  annotations:
+    app.kubernetes.io/description: "Demonstrates nodeSelector, tolerations, and pod anti-affinity for HA placement."
+spec:
+  containers:
+    - name: web
+      image: nginx:1.25-alpine
+      ports:
+        - name: http
+          containerPort: 80
+          servicePort: 80
+          protocol: TCP
+          expose: true
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
+      readinessProbe:
+        type: httpGet
+        httpGet:
+          path: /
+          port: 80
+        initialDelaySeconds: 3
+        periodSeconds: 5
+  replicas: 3
+  # nodeSelector: restrict pods to nodes labelled environment=production.
+  nodeSelector:
+    kubernetes.io/os: linux
+  # tolerations: allow scheduling on tainted nodes (e.g. dedicated app nodes).
+  tolerations:
+    - key: "dedicated"
+      operator: "Equal"
+      value: "app"
+      effect: "NoSchedule"
+    - key: "node.kubernetes.io/not-ready"
+      operator: "Exists"
+      effect: "NoExecute"
+      tolerationSeconds: 30
+  # affinity: spread replicas across nodes for high availability.
+  # preferredDuringScheduling means Kubernetes will try but won't block scheduling.
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: scheduling-demo
+            topologyKey: kubernetes.io/hostname
+  serviceType: LoadBalancer
+  securityContext:
+    runAsNonRoot: false

@@ -1,0 +1,380 @@
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: full-featured
+  namespace: apps
+  annotations:
+    app.kubernetes.io/description: "Kitchen-sink example. Every AppDefinition field in one realistic scenario: 3 containers, HPA, ingress, disk, inline configs/secrets, lifecycle hooks, scheduling constraints, monitoring, logging, security context, and imagePullSecrets."
+spec:
+  # -----------------------------------------------------------------------
+  # Containers
+  # Three-container pod: web app + metrics exporter sidecar + log shipper.
+  # -----------------------------------------------------------------------
+  containers:
+    - name: web
+      image: nginx:1.25-alpine
+      command: ["nginx"]
+      args: ["-g", "daemon off;"]
+      ports:
+        - name: http
+          containerPort: 80
+          servicePort: 80
+          protocol: TCP
+          expose: true
+        - name: stub-status
+          containerPort: 8080
+          servicePort: 8080
+          protocol: TCP
+          expose: false
+          metricsPath: /stub_status
+      env:
+        - name: APP_ENV
+          value: "production"
+        - name: APP_NAME
+          value: "full-featured"
+        # Downward API: inject pod name/namespace as env vars.
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "512Mi"
+      readinessProbe:
+        type: httpGet
+        httpGet:
+          path: /healthz
+          port: 80
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 2
+        failureThreshold: 3
+        successThreshold: 1
+      livenessProbe:
+        type: httpGet
+        httpGet:
+          path: /healthz
+          port: 80
+        initialDelaySeconds: 15
+        periodSeconds: 20
+        timeoutSeconds: 3
+        failureThreshold: 5
+
+    - name: metrics-exporter
+      image: nginx/nginx-prometheus-exporter:1.1
+      args: ["-nginx.scrape-uri=http://localhost:8080/stub_status"]
+      ports:
+        - name: metrics
+          containerPort: 9113
+          servicePort: 9113
+          protocol: TCP
+          expose: true
+          metricsPath: /metrics
+      resources:
+        requests:
+          cpu: "10m"
+          memory: "16Mi"
+        limits:
+          cpu: "50m"
+          memory: "32Mi"
+      readinessProbe:
+        type: httpGet
+        httpGet:
+          path: /metrics
+          port: 9113
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      livenessProbe:
+        type: tcpSocket
+        tcpSocket:
+          port: 9113
+        initialDelaySeconds: 10
+        periodSeconds: 20
+
+    - name: log-shipper
+      image: busybox:stable
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          mkdir -p /logs
+          touch /logs/access.log /logs/error.log /tmp/healthy
+          tail -F /logs/access.log /logs/error.log
+      resources:
+        requests:
+          cpu: "5m"
+          memory: "16Mi"
+        limits:
+          cpu: "30m"
+          memory: "32Mi"
+      readinessProbe:
+        type: exec
+        exec:
+          command: ["/bin/sh", "-c", "test -f /tmp/healthy"]
+        initialDelaySeconds: 2
+        periodSeconds: 10
+      livenessProbe:
+        type: exec
+        exec:
+          command: ["/bin/sh", "-c", "test -f /tmp/healthy"]
+        initialDelaySeconds: 10
+        periodSeconds: 30
+        failureThreshold: 3
+
+  # -----------------------------------------------------------------------
+  # Replicas & Autoscaling
+  # -----------------------------------------------------------------------
+  replicas: 3
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 60
+    targetMemoryUtilizationPercentage: 70
+
+  # -----------------------------------------------------------------------
+  # Persistent Disk
+  # -----------------------------------------------------------------------
+  disk:
+    sizeInGi: 20
+    storageClassName: local-path
+    setFsGroup: true
+    partitions:
+      - mountPath: /usr/share/nginx/html/uploads
+        subPath: uploads
+      - mountPath: /var/cache/nginx
+        subPath: cache
+      - mountPath: /logs
+        subPath: logs
+
+  # -----------------------------------------------------------------------
+  # Inline ConfigMaps
+  # -----------------------------------------------------------------------
+  configMaps:
+    - name: nginx-config
+      mountPath: /etc/nginx/conf.d
+      data:
+        default.conf: |
+          server {
+            listen 80;
+            server_name _;
+
+            location / {
+              root /usr/share/nginx/html;
+              index index.html;
+              add_header X-App full-featured;
+              add_header X-Frame-Options DENY;
+              add_header X-Content-Type-Options nosniff;
+            }
+            location /healthz {
+              return 200 "ok\n";
+              add_header Content-Type text/plain;
+            }
+            location /stub_status {
+              stub_status;
+              allow 127.0.0.1;
+              deny all;
+            }
+            location /uploads {
+              alias /usr/share/nginx/html/uploads;
+              autoindex off;
+            }
+          }
+        nginx.conf.snippet: |
+          # Extra tuning params loaded by default.conf include
+          keepalive_timeout 65;
+          gzip on;
+          gzip_types text/plain application/json;
+
+    - name: app-config
+      mountPath: /etc/app
+      data:
+        config.yaml: |
+          app:
+            name: full-featured
+            env: production
+            log_level: info
+            max_upload_size_mb: 50
+          database:
+            pool_size: 10
+            timeout_seconds: 30
+          cache:
+            ttl_seconds: 300
+
+    - name: html-content
+      mountPath: /usr/share/nginx/html
+      data:
+        index.html: |
+          <!DOCTYPE html>
+          <html>
+          <head><title>full-featured</title></head>
+          <body>
+            <h1>app-operator full-featured demo</h1>
+            <p>Every AppDefinition field active in this deployment.</p>
+          </body>
+          </html>
+
+  # -----------------------------------------------------------------------
+  # Inline Secrets
+  # -----------------------------------------------------------------------
+  secrets:
+    # Mode 1: env vars only — DB credentials available as env vars.
+    - name: db-credentials
+      asEnvVars: true
+      data:
+        DB_HOST: "postgres.apps.svc.cluster.local"
+        DB_PORT: "5432"
+        DB_NAME: "fulldb"
+        DB_USER: "fulluser"
+        DB_PASSWORD: "ultra-secret-db-pass"
+        DATABASE_URL: "postgres://fulluser:ultra-secret-db-pass@postgres.apps.svc.cluster.local:5432/fulldb?sslmode=require"
+
+    # Mode 2: file mount only — TLS certs for mutual TLS with upstream services.
+    - name: tls-client-certs
+      mountPath: /etc/ssl/client
+      data:
+        ca.crt: |
+          -----BEGIN CERTIFICATE-----
+          MIIBVzCCAQCgAwIBAgIUExampleCACert...
+          -----END CERTIFICATE-----
+        client.crt: |
+          -----BEGIN CERTIFICATE-----
+          MIIBVzCCAQCgAwIBAgIUExampleClientCert...
+          -----END CERTIFICATE-----
+        client.key: |
+          -----BEGIN RSA PRIVATE KEY-----
+          MIIEowIBAAKCAQEAExamplePrivateKey...
+          -----END RSA PRIVATE KEY-----
+
+    # Mode 3: both env vars AND file mount — API keys available both ways.
+    - name: api-keys
+      mountPath: /etc/app/secrets
+      asEnvVars: true
+      data:
+        STRIPE_SECRET_KEY: "sk_live_ExampleStripeKey"
+        SENDGRID_API_KEY: "SG.ExampleSendGridKey"
+        INTERNAL_API_TOKEN: "tok_prod_ExampleInternalToken"
+        OAUTH_CLIENT_SECRET: "oauth_secret_ExampleValue"
+
+  # -----------------------------------------------------------------------
+  # Networking
+  # -----------------------------------------------------------------------
+  serviceType: ClusterIP
+  ingressClass: traefik
+  domains:
+    - name: full-featured.demo.local
+      path: /
+      tls: false
+      portName: http
+    - name: metrics.full-featured.demo.local
+      path: /metrics
+      tls: false
+      portName: metrics
+    # TLS domain (requires cert-manager):
+    # - name: full-featured.example.com
+    #   path: /
+    #   tls: true
+    #   redirect_tls: true
+    #   certIssuer: letsencrypt-prod
+    #   portName: http
+    #   secretName: full-featured-tls
+    #   annotations:
+    #     cert-manager.io/cluster-issuer: letsencrypt-prod
+  ingressAnnotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: apps-ratelimit@kubernetescrd
+
+  # -----------------------------------------------------------------------
+  # Lifecycle Hooks
+  # -----------------------------------------------------------------------
+  lifecycle:
+    postStart:
+      exec:
+        command: ["/bin/sh", "-c", "echo full-featured started at $(date) > /tmp/started"]
+    preStop:
+      exec:
+        command: ["/bin/sh", "-c", "sleep 10 && nginx -s quit"]
+
+  # -----------------------------------------------------------------------
+  # Scheduling: nodeSelector, tolerations, pod anti-affinity
+  # -----------------------------------------------------------------------
+  nodeSelector:
+    kubernetes.io/os: linux
+
+  tolerations:
+    - key: "dedicated"
+      operator: "Equal"
+      value: "app"
+      effect: "NoSchedule"
+    - key: "node.kubernetes.io/not-ready"
+      operator: "Exists"
+      effect: "NoExecute"
+      tolerationSeconds: 60
+
+  affinity:
+    # Prefer to spread pods across nodes for HA.
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: full-featured
+            topologyKey: kubernetes.io/hostname
+    # Prefer nodes with SSD disks for latency-sensitive storage.
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 50
+          preference:
+            matchExpressions:
+              - key: disktype
+                operator: In
+                values: ["ssd"]
+
+  # -----------------------------------------------------------------------
+  # Security Context
+  # -----------------------------------------------------------------------
+  securityContext:
+    runAsNonRoot: false   # nginx requires root to bind port 80; use nginx-unprivileged for non-root
+    runAsUser: 0
+    fsGroup: 101           # nginx group — ensures PVC mounts are group-writable
+
+  # -----------------------------------------------------------------------
+  # Private Registry
+  # -----------------------------------------------------------------------
+  imagePullSecrets:
+    - name: my-registry-creds
+
+  # -----------------------------------------------------------------------
+  # Observability
+  # -----------------------------------------------------------------------
+  monitoringConfig:
+    enabled: true
+    scrapeInterval: "15s"
+    labels:
+      app.kubernetes.io/name: full-featured
+      app.kubernetes.io/component: web
+      team: platform
+      env: production
+
+  loggingConfig:
+    stdout:
+      enabled: true
+      format: json
+    stderr:
+      enabled: true
+      format: json
+    files:
+      - path: /logs/access.log
+        format: json
+        multilinePattern: "^\\d{4}-\\d{2}-\\d{2}"
+      - path: /logs/error.log
+        format: text
+        multilinePattern: "^\\d{4}/\\d{2}/\\d{2}"

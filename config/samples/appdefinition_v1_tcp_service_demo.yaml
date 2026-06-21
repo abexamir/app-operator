@@ -1,0 +1,47 @@
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: tcp-service-demo
+  namespace: apps
+  annotations:
+    app.kubernetes.io/description: "Non-HTTP TCP service (Redis-compatible memcached). Demonstrates TCP port, tcpSocket probe, and LoadBalancer without domains."
+spec:
+  containers:
+    - name: cache
+      image: memcached:1.6-alpine
+      command: ["memcached"]
+      args: ["-m", "64", "-p", "11211", "-u", "memcache", "-v"]
+      ports:
+        - name: memcache
+          containerPort: 11211
+          servicePort: 11211
+          protocol: TCP
+          expose: true
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
+      readinessProbe:
+        type: tcpSocket
+        tcpSocket:
+          port: 11211
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 2
+        failureThreshold: 3
+      livenessProbe:
+        type: tcpSocket
+        tcpSocket:
+          port: 11211
+        initialDelaySeconds: 15
+        periodSeconds: 20
+        failureThreshold: 5
+
+  replicas: 1
+  serviceType: ClusterIP
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 11211
