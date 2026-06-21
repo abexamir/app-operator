@@ -60,25 +60,28 @@ type LoggingStream struct {
 // # Implementation paths to consider
 //
 // Option A — Loki + Promtail (simplest, already Prometheus-compatible)
-//   Promtail runs as a DaemonSet and tails /var/log/pods/ on each node.
-//   It auto-discovers all pods via the Kubernetes API; no CRD is needed.
-//   Opt-in scraping can be enforced by having the operator inject a pod
-//   annotation (e.g. promtail.io/scrape: "true") only when loggingConfig
-//   is present, so Promtail's relabel rules can filter on it.
-//   Logs land in Loki and are queryable with LogQL alongside Prometheus metrics.
+//
+//	Promtail runs as a DaemonSet and tails /var/log/pods/ on each node.
+//	It auto-discovers all pods via the Kubernetes API; no CRD is needed.
+//	Opt-in scraping can be enforced by having the operator inject a pod
+//	annotation (e.g. promtail.io/scrape: "true") only when loggingConfig
+//	is present, so Promtail's relabel rules can filter on it.
+//	Logs land in Loki and are queryable with LogQL alongside Prometheus metrics.
 //
 // Option B — OpenTelemetry Operator + PodLogs CRD (closest to ServiceMonitor)
-//   The OTel Operator introduces a PodLogs CRD. The operator can create a
-//   PodLogs object (via unstructured, same pattern as ServiceMonitor) that
-//   targets pods by label selector. The OTel Collector pipeline ships logs
-//   to any backend (Loki, Elasticsearch, S3, etc.).
-//   Gives explicit, per-app opt-in control — identical model to ServiceMonitor.
+//
+//	The OTel Operator introduces a PodLogs CRD. The operator can create a
+//	PodLogs object (via unstructured, same pattern as ServiceMonitor) that
+//	targets pods by label selector. The OTel Collector pipeline ships logs
+//	to any backend (Loki, Elasticsearch, S3, etc.).
+//	Gives explicit, per-app opt-in control — identical model to ServiceMonitor.
 //
 // Option C — Fluent Bit / Vector DaemonSet with annotation-based filtering
-//   Similar to Option A but using Fluent Bit (lightweight C) or Vector
-//   (Rust, rich transform DSL). The operator injects annotations that the
-//   DaemonSet's config uses to include/exclude pods and apply parsing rules.
-//   Good if the team already operates one of these shippers.
+//
+//	Similar to Option A but using Fluent Bit (lightweight C) or Vector
+//	(Rust, rich transform DSL). The operator injects annotations that the
+//	DaemonSet's config uses to include/exclude pods and apply parsing rules.
+//	Good if the team already operates one of these shippers.
 //
 // The loggingConfig fields (stdout/stderr format, file paths, multiline patterns)
 // map naturally onto Promtail pipeline_stages or OTel transform processors and
