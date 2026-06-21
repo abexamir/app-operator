@@ -634,6 +634,17 @@ func (r *AppDefinitionReconciler) reconcilePVC(ctx context.Context, appDef *v1.A
 	op, err := ctrl.CreateOrUpdate(ctx, r.Client, pvc, func() error {
 		pvc.Labels = standardLabels(appDef.Name)
 
+		// Merge user-supplied annotations without clobbering annotations set by
+		// the PVC controller (e.g. pv.kubernetes.io/bind-completed).
+		if len(appDef.Spec.Disk.Annotations) > 0 {
+			if pvc.Annotations == nil {
+				pvc.Annotations = make(map[string]string)
+			}
+			for k, v := range appDef.Spec.Disk.Annotations {
+				pvc.Annotations[k] = v
+			}
+		}
+
 		requested := resource.MustParse(fmt.Sprintf("%dGi", appDef.Spec.Disk.SizeInGi))
 
 		if pvc.ResourceVersion == "" {

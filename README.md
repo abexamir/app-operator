@@ -71,7 +71,7 @@ kubectl delete -f https://raw.githubusercontent.com/abexamir/app-operator/main/d
 | `initContainers` | Init containers on the `Deployment` (no separate resource) |
 | `ports[].expose: true` | `Service` |
 | `domains[]` | `Ingress` |
-| `disk` | `PersistentVolumeClaim` |
+| `disk` | `PersistentVolumeClaim` (with `disk.annotations` merged into PVC metadata) |
 | `autoscaling.enabled: true` | `HorizontalPodAutoscaler` |
 | `configMaps[]` | `ConfigMap` per entry (operator-owned) |
 | `secrets[]` with `data` | `Secret` per entry (operator-owned) |
@@ -231,7 +231,12 @@ disk:
       subPath: data
     - mountPath: /logs
       subPath: logs
+  annotations:
+    backup.velero.io/backup-volumes: "app-disk"
+    snapshot.storage.kubernetes.io/allow-volume-snapshot: "true"
 ```
+
+`disk.annotations` are merged into the PVC's metadata annotations on every reconcile. Annotations set by the storage provisioner (e.g. `pv.kubernetes.io/bind-completed`) are preserved — user-supplied keys are added or updated, never removed.
 
 Storage size can be **expanded** by increasing `sizeInGi`. The storage class must have `allowVolumeExpansion: true`. While expansion is in progress, `DiskReady` shows `bound (Xgi, expanding to Ygi)`. Shrinking is not supported — to downsize, delete the AppDefinition and recreate it.
 
@@ -375,11 +380,15 @@ serviceType: ClusterIP   # ClusterIP | NodePort | LoadBalancer
 
 ### `ingressClass` and `ingressAnnotations`
 
+`ingressAnnotations` are set verbatim on the Ingress resource's metadata. Use them for any ingress-controller-specific configuration.
+
 ```yaml
 ingressClass: nginx
 ingressAnnotations:
   nginx.ingress.kubernetes.io/proxy-body-size: "50m"
   nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+  nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  cert-manager.io/cluster-issuer: letsencrypt-prod
 ```
 
 ### `nodeSelector`, `tolerations`, `affinity`

@@ -40,6 +40,9 @@ type DiskConfig struct {
 	StorageClassName string          `json:"storageClassName"`
 	SetFsGroup       bool            `json:"setFsGroup,omitempty"`
 	Partitions       []DiskPartition `json:"partitions,omitempty"`
+	// Annotations are added verbatim to the PVC metadata. Useful for storage-class-specific
+	// hints, backup policies, or custom tooling that selects PVCs by annotation.
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 type LoggingFile struct {

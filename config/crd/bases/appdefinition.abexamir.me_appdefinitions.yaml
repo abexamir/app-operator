@@ -1447,6 +1447,13 @@ spec:
                 type: array
               disk:
                 properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Annotations are added verbatim to the PVC metadata. Useful for storage-class-specific
+                      hints, backup policies, or custom tooling that selects PVCs by annotation.
+                    type: object
                   partitions:
                     items:
                       properties:
