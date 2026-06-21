@@ -460,7 +460,7 @@ func (r *AppDefinitionReconciler) reconcileIngress(ctx context.Context, appDef *
 			ingress.Annotations[k] = v
 		}
 		if appDef.Spec.IngressClass != "" {
-			ingress.Annotations["kubernetes.io/ingress.class"] = appDef.Spec.IngressClass
+			ingress.Spec.IngressClassName = &appDef.Spec.IngressClass
 		}
 
 		// Build TLS blocks — one entry per TLS-enabled domain with its own secret.
@@ -606,13 +606,10 @@ func (r *AppDefinitionReconciler) reconcileHPA(ctx context.Context, appDef *v1.A
 // ----------------------------------------------------------------
 
 func (r *AppDefinitionReconciler) updateStatus(ctx context.Context, appDef *v1.AppDefinition, reconcileErr error) error {
-	appDef.Status.ObservedGeneration = appDef.Generation
-
 	desiredReplicas := int32(1)
 	if appDef.Spec.Replicas != nil {
 		desiredReplicas = *appDef.Spec.Replicas
 	}
-	appDef.Status.Replicas = desiredReplicas
 
 	// Fetch deployment to get ready replica count.
 	deployment := &appsv1.Deployment{}
@@ -623,44 +620,55 @@ func (r *AppDefinitionReconciler) updateStatus(ctx context.Context, appDef *v1.A
 		}
 		deploymentFound = false
 	}
+
+	var readyReplicas int32
 	if deploymentFound {
-		appDef.Status.ReadyReplicas = deployment.Status.ReadyReplicas
+		readyReplicas = deployment.Status.ReadyReplicas
 	}
 
 	now := metav1.Now()
 	ready := metav1.ConditionFalse
 	readyReason := "Progressing"
-	readyMsg := fmt.Sprintf("%d/%d replicas ready", appDef.Status.ReadyReplicas, desiredReplicas)
+	readyMsg := fmt.Sprintf("%d/%d replicas ready", readyReplicas, desiredReplicas)
+	phase := "Progressing"
+	lastError := ""
 
 	switch {
 	case appDef.Spec.Paused:
-		appDef.Status.Phase = "Paused"
+		phase = "Paused"
 		readyReason = "Paused"
 		readyMsg = "Reconciliation is paused"
 	case reconcileErr != nil:
-		appDef.Status.Phase = "Failed"
-		appDef.Status.LastError = reconcileErr.Error()
+		phase = "Failed"
+		lastError = reconcileErr.Error()
 		readyReason = "ReconcileError"
 		readyMsg = reconcileErr.Error()
-	case deploymentFound && deployment.Status.ReadyReplicas >= desiredReplicas:
-		appDef.Status.Phase = "Available"
-		appDef.Status.LastError = ""
+	case deploymentFound && readyReplicas >= desiredReplicas:
+		phase = "Available"
 		ready = metav1.ConditionTrue
 		readyReason = "DeploymentAvailable"
-	default:
-		appDef.Status.Phase = "Progressing"
 	}
 
-	apimeta.SetStatusCondition(&appDef.Status.Conditions, metav1.Condition{
+	// Re-fetch to get the latest resourceVersion and avoid update conflicts.
+	fresh := &v1.AppDefinition{}
+	if err := r.Get(ctx, types.NamespacedName{Name: appDef.Name, Namespace: appDef.Namespace}, fresh); err != nil {
+		return fmt.Errorf("failed to re-fetch AppDefinition for status update: %w", err)
+	}
+	fresh.Status.Phase = phase
+	fresh.Status.Replicas = desiredReplicas
+	fresh.Status.ReadyReplicas = readyReplicas
+	fresh.Status.ObservedGeneration = fresh.Generation
+	fresh.Status.LastError = lastError
+	apimeta.SetStatusCondition(&fresh.Status.Conditions, metav1.Condition{
 		Type:               v1.ConditionTypeReady,
 		Status:             ready,
 		Reason:             readyReason,
 		Message:            readyMsg,
 		LastTransitionTime: now,
-		ObservedGeneration: appDef.Generation,
+		ObservedGeneration: fresh.Generation,
 	})
 
-	if err := r.Status().Update(ctx, appDef); err != nil {
+	if err := r.Status().Update(ctx, fresh); err != nil {
 		return fmt.Errorf("failed to update AppDefinition status: %w", err)
 	}
 	return nil
