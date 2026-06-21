@@ -52,7 +52,10 @@ spec:
     - name: metrics
       image: prom/prometheus:v2.45.0
       command: ["prometheus"]
-      args: ["--config.file=/etc/prometheus/prometheus.yml"]
+      args:
+        - "--config.file=/etc/prometheus/prometheus.yml"
+        - "--storage.tsdb.path=/data"    # write TSDB to the PVC partition
+        - "--web.listen-address=:9090"
       ports:
         - name: metrics
           containerPort: 9090
@@ -82,7 +85,7 @@ spec:
         initialDelaySeconds: 15
         periodSeconds: 20
 
-  replicas: 3
+  replicas: 1    # Prometheus requires a single writer for its TSDB; multiple replicas cause lock conflicts.
 
   domains:
     - name: app.example.com
@@ -102,7 +105,7 @@ spec:
 
   disk:
     sizeInGi: 10
-    storageClassName: standard
+    storageClassName: local-path
     setFsGroup: true
     partitions:
       - mountPath: /data
@@ -111,6 +114,16 @@ spec:
         subPath: logs
 
   configMaps:
+    - name: nginx-config
+      mountPath: /etc/nginx/conf.d
+      data:
+        default.conf: |
+          server {
+            listen 80;
+            server_name _;
+            location / { root /usr/share/nginx/html; index index.html; }
+            location /health { return 200 "ok\n"; add_header Content-Type text/plain; }
+          }
     - name: prometheus-config
       mountPath: /etc/prometheus
       data:
@@ -150,10 +163,8 @@ spec:
       app.kubernetes.io/component: web
 
   securityContext:
-    runAsUser: 1000
-    runAsGroup: 1000
-    fsGroup: 1000
-    runAsNonRoot: true
+    runAsNonRoot: false
+    fsGroup: 65534    # nobody group — ensures PVC is group-writable for prometheus (UID 65534)
 
   serviceType: ClusterIP
 

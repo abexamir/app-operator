@@ -70,7 +70,7 @@ spec:
 
     - name: metrics-exporter
       image: nginx/nginx-prometheus-exporter:1.1
-      args: ["-nginx.scrape-uri=http://localhost:8080/stub_status"]
+      args: ["-nginx.scrape-uri=http://localhost:80/stub_status"]
       ports:
         - name: metrics
           containerPort: 9113
@@ -289,7 +289,7 @@ spec:
     #     cert-manager.io/cluster-issuer: letsencrypt-prod
   ingressAnnotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web
-    traefik.ingress.kubernetes.io/router.middlewares: apps-ratelimit@kubernetescrd
+    # traefik.ingress.kubernetes.io/router.middlewares: apps-ratelimit@kubernetescrd  # enable when Middleware CRD is installed
 
   # -----------------------------------------------------------------------
   # Lifecycle Hooks

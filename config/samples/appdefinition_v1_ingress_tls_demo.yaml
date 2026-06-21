@@ -31,7 +31,6 @@ spec:
         periodSeconds: 5
     - name: api
       image: traefik/whoami:latest
-      command: ["whoami"]
       args: ["--port=8080", "--name=api"]
       ports:
         - name: api

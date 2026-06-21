@@ -44,9 +44,10 @@ spec:
         failureThreshold: 5
 
     # Container 2: tcpSocket probes — for non-HTTP TCP services.
-    # Uses traefik/whoami which listens on TCP, probed via socket connection.
+    # Uses traefik/whoami listening on 8080 (non-default port to avoid conflict with container 1).
     - name: api
       image: traefik/whoami:latest
+      args: ["--port=8080"]
       ports:
         - name: api
           containerPort: 8080

@@ -44,7 +44,7 @@ spec:
     # Sidecar 1: nginx-prometheus-exporter scrapes nginx stub_status and exposes /metrics.
     - name: metrics-exporter
       image: nginx/nginx-prometheus-exporter:1.1
-      args: ["-nginx.scrape-uri=http://localhost:80/stub_status"]
+      args: ["-nginx.scrape-uri=http://localhost/stub_status"]
       ports:
         - name: metrics
           containerPort: 9113
@@ -92,6 +92,25 @@ spec:
         periodSeconds: 10
 
   replicas: 2
+
+  configMaps:
+    - name: nginx-config
+      mountPath: /etc/nginx/conf.d
+      data:
+        default.conf: |
+          server {
+            listen 80;
+            server_name _;
+            location / {
+              root /usr/share/nginx/html;
+              index index.html;
+            }
+            location /stub_status {
+              stub_status;
+              allow 127.0.0.1;
+              deny all;
+            }
+          }
 
   monitoringConfig:
     enabled: true

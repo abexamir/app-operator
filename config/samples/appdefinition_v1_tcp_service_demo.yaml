@@ -43,5 +43,4 @@ spec:
   replicas: 1
   serviceType: ClusterIP
   securityContext:
-    runAsNonRoot: true
-    runAsUser: 11211
+    runAsNonRoot: false
