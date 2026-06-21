@@ -64,9 +64,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - monitoring.coreos.com
+  - autoscaling
   resources:
-  - servicemonitors
+  - horizontalpodautoscalers
   verbs:
   - create
   - delete
