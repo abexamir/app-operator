@@ -474,30 +474,16 @@ paused: true
 All samples live in `config/samples/`. Apply one:
 
 ```sh
-kubectl apply -f config/samples/appdefinition_v1_sidecar_demo.yaml
+kubectl apply -f config/samples/appdefinition_v1_web_app.yaml
 ```
 
-| Sample | What it demonstrates |
+| Sample | What it covers |
 |---|---|
-| `nginx_demo` | Minimal app — image, ports, replicas |
-| `whoami_demo` | LoadBalancer service type |
-| `ingress_demo` | Ingress with path routing |
-| `ingress_tls_demo` | Multi-container pod, TLS ingress, per-domain port routing |
-| `probes_demo` | All three probe types: `httpGet`, `tcpSocket`, `exec` |
-| `lifecycle_demo` | `postStart` and `preStop` hooks |
-| `autoscaling_demo` | CPU-based HPA |
-| `autoscaling_memory_demo` | Memory-based HPA |
-| `disk_demo` | PVC with sub-path partitions |
-| `config_demo` | Inline ConfigMap mounted as a directory |
-| `multi_config_demo` | Multiple ConfigMaps + all three Secret modes |
-| `security_context_demo` | Pod security context, non-root user |
-| `scheduling_demo` | nodeSelector, tolerations, pod anti-affinity |
-| `tcp_service_demo` | TCP-only service (no HTTP) |
-| `sidecar_demo` | nginx + metrics-exporter + log-shipper sidecars with ServiceMonitor |
-| `private_registry_demo` | imagePullSecrets for a private registry |
-| `paused_demo` | Suspended reconciliation |
-| `eso_demo` | ExternalSecrets Operator integration with ClusterSecretStore |
-| `complex_app` | Multi-container with PVC, ConfigMaps, Secrets, monitoring, ingress |
+| `minimal` | Single container, port, replicas — copy-paste starting point |
+| `web_app` | Init container, all probe types, HPA (CPU+memory), multi-domain TLS ingress, per-domain annotations, ingressAnnotations, configMap, inline secret, imagePullSecrets, non-root security context, nodeSelector + tolerations + pod anti-affinity |
+| `stateful_app` | Disk with partitions + annotations + setFsGroup, fsGroup, postStart, all five secrets modes (inline files / inline envVars / inline both / secretRef files / secretRef envVars), multiple configMaps |
+| `external_secrets` | ExternalSecrets Operator — ClusterSecretStore, SecretStore, `data` with property + version pinning, `dataFrom` bulk import, `mountPath` file mount, `asEnvVars` injection, init container waiting for ESO sync |
+| `platform_ops` | Multi-container sidecars, TCP service, expose:false metrics port, ServiceMonitor, LoadBalancer, loggingConfig (stdout + stderr + files with multilinePattern) |
 
 ---
 

@@ -1,0 +1,137 @@
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: web-app
+  namespace: default
+spec:
+  initContainers:
+    - name: migrate
+      image: my-app:v1.2.0
+      command: ["./migrate", "--apply"]
+      env:
+        - name: DB_HOST
+          value: postgres.default.svc
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+
+  containers:
+    - name: web
+      image: my-app:v1.2.0
+      ports:
+        - name: http
+          containerPort: 8080
+          servicePort: 80
+          expose: true
+          metricsPath: /metrics
+        - name: grpc
+          containerPort: 9090
+          servicePort: 9090
+          expose: true
+          protocol: TCP
+      env:
+        - name: LOG_LEVEL
+          value: info
+      resources:
+        requests:
+          cpu: "200m"
+          memory: "256Mi"
+        limits:
+          cpu: "1"
+          memory: "512Mi"
+      readinessProbe:
+        type: httpGet
+        httpGet:
+          path: /healthz
+          port: 8080
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 2
+        failureThreshold: 3
+        successThreshold: 1
+      livenessProbe:
+        type: exec
+        exec:
+          command: ["/bin/sh", "-c", "pgrep my-app"]
+        initialDelaySeconds: 30
+        periodSeconds: 20
+        timeoutSeconds: 5
+        failureThreshold: 3
+
+  # preStop lets the load balancer drain connections before the pod receives SIGTERM
+  lifecycle:
+    preStop:
+      exec:
+        command: ["/bin/sh", "-c", "sleep 5"]
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  domains:
+    - name: app.example.com
+      path: /
+      tls: true
+      redirect_tls: true
+      certIssuer: letsencrypt-prod
+      secretName: web-app-tls   # omit to auto-generate as <app>-<domain>-tls
+      portName: http
+    - name: api.example.com
+      path: /api
+      tls: false
+      portName: grpc
+      annotations:
+        nginx.ingress.kubernetes.io/rewrite-target: /
+
+  ingressClass: nginx
+  ingressAnnotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+
+  configMaps:
+    - name: app-config
+      mountPath: /etc/config
+      data:
+        config.yaml: |
+          port: 8080
+          log_level: info
+          feature_flags:
+            dark_mode: true
+
+  secrets:
+    - name: credentials
+      asEnvVars: true
+      data:
+        DB_PASSWORD: "changeme"
+        API_KEY: "abc123"
+
+  imagePullSecrets:
+    - name: ghcr-token
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+
+  nodeSelector:
+    kubernetes.io/arch: amd64
+
+  tolerations:
+    - key: "dedicated"
+      operator: "Equal"
+      value: "web"
+      effect: "NoSchedule"
+
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: web-app

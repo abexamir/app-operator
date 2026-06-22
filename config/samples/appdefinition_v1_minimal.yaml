@@ -1,8 +1,8 @@
 apiVersion: appdefinition.abexamir.me/v1
 kind: AppDefinition
 metadata:
-  name: paused-demo
-  namespace: apps
+  name: my-app
+  namespace: default
 spec:
   containers:
     - name: web
@@ -11,8 +11,5 @@ spec:
         - name: http
           containerPort: 80
           servicePort: 80
-          protocol: TCP
           expose: true
-  replicas: 1
-  paused: true
-  serviceType: LoadBalancer
+  replicas: 2

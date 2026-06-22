@@ -1,0 +1,120 @@
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: stateful-app
+  namespace: default
+spec:
+  initContainers:
+    - name: init-data
+      image: busybox:1.36
+      command: ["/bin/sh", "-c", "cp /defaults/* /data/ 2>/dev/null || true"]
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+
+  containers:
+    - name: db
+      image: postgres:16-alpine
+      ports:
+        - name: postgres
+          containerPort: 5432
+          servicePort: 5432
+          expose: true
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "512Mi"
+        limits:
+          cpu: "2"
+          memory: "2Gi"
+      readinessProbe:
+        type: exec
+        exec:
+          command: ["pg_isready", "-U", "postgres"]
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        failureThreshold: 6
+      livenessProbe:
+        type: tcpSocket
+        tcpSocket:
+          port: 5432
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 3
+
+  lifecycle:
+    postStart:
+      exec:
+        command: ["/bin/sh", "-c", "psql -c 'CREATE TABLE IF NOT EXISTS _ready (id int)'"]
+
+  # disk forces replicas: 1 — ReadWriteOnce PVCs allow a single writer
+  replicas: 1
+  # paused: true  # uncomment to suspend reconciliation during maintenance
+
+  disk:
+    sizeInGi: 20
+    storageClassName: standard
+    setFsGroup: true   # injects securityContext.fsGroup so the PVC is group-writable
+    partitions:
+      - mountPath: /data
+        subPath: data
+      - mountPath: /logs
+        subPath: logs
+    annotations:
+      backup.velero.io/backup-volumes: "stateful-app-disk"
+      snapshot.storage.kubernetes.io/allow-volume-snapshot: "true"
+
+  configMaps:
+    - name: server-config
+      mountPath: /etc/postgresql
+      data:
+        postgresql.conf: |
+          max_connections = 100
+          shared_buffers = 128MB
+          log_min_duration_statement = 1000
+    - name: init-scripts
+      mountPath: /docker-entrypoint-initdb.d
+      data:
+        01-schema.sql: |
+          CREATE TABLE IF NOT EXISTS events (id bigserial PRIMARY KEY, payload jsonb);
+
+  secrets:
+    # inline: mount as files only
+    - name: tls-certs
+      mountPath: /etc/tls
+      data:
+        tls.crt: "LS0tLS1CRUdJTi..."
+        tls.key: "LS0tLS1CRUdJTi..."
+
+    # inline: inject as env vars only
+    - name: db-creds
+      asEnvVars: true
+      data:
+        POSTGRES_PASSWORD: "changeme"
+        POSTGRES_USER: "app"
+
+    # inline: mount as files AND inject as env vars
+    - name: api-keys
+      mountPath: /etc/keys
+      asEnvVars: true
+      data:
+        API_KEY: "abc123"
+        API_SECRET: "xyz789"
+
+    # external reference: mount a pre-existing Secret as files (not created by operator)
+    - name: external-tls
+      mountPath: /etc/external/tls
+      secretRef: vault-agent-tls
+
+    # external reference: inject a pre-existing Secret as env vars
+    - name: external-db
+      asEnvVars: true
+      secretRef: prod-db-credentials
+
+  securityContext:
+    runAsUser: 999
+    runAsGroup: 999
+    runAsNonRoot: true
+    fsGroup: 999   # postgres needs group write access to /data
