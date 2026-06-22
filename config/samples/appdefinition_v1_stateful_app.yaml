@@ -51,12 +51,14 @@ spec:
 
   # disk forces replicas: 1 — ReadWriteOnce PVCs allow a single writer
   replicas: 1
-  # paused: true  # uncomment to suspend reconciliation during maintenance
+  # paused: true  # uncomment to suspend all reconciliation during maintenance
 
   disk:
     sizeInGi: 20
     storageClassName: standard
     setFsGroup: true   # injects securityContext.fsGroup so the PVC is group-writable
+    # protect: true  # uncomment while migrating the PVC — prevents recreation if the PVC
+    #                # is absent; annotation updates and size expansion still apply normally
     partitions:
       - mountPath: /data
         subPath: data

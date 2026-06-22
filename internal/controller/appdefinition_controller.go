@@ -681,6 +681,20 @@ func (r *AppDefinitionReconciler) reconcileSecrets(ctx context.Context, appDef *
 func (r *AppDefinitionReconciler) reconcilePVC(ctx context.Context, appDef *v1.AppDefinition) error {
 	logger := log.FromContext(ctx)
 
+	// When protect is set, skip creation but still allow annotation updates and size expansion
+	// on an existing PVC (e.g. triggered alongside a migration).
+	if appDef.Spec.Disk.Protect {
+		existing := &corev1.PersistentVolumeClaim{}
+		if err := r.Get(ctx, types.NamespacedName{Name: pvcName(appDef.Name), Namespace: appDef.Namespace}, existing); err != nil {
+			if apierrors.IsNotFound(err) {
+				logger.V(1).Info("disk.protect is true and PVC is absent, skipping creation")
+				return nil
+			}
+			return fmt.Errorf("getting PVC: %w", err)
+		}
+		// PVC exists — fall through to normal reconcile so annotations and size are kept in sync.
+	}
+
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pvcName(appDef.Name),

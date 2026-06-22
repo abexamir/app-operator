@@ -241,6 +241,18 @@ disk:
 
 Storage size can be **expanded** by increasing `sizeInGi`. The storage class must have `allowVolumeExpansion: true`. While expansion is in progress, `DiskReady` shows `bound (Xgi, expanding to Ygi)`. Shrinking is not supported — to downsize, delete the AppDefinition and recreate it.
 
+`disk.protect: true` prevents the operator from creating a new PVC when none exists. Use this during PVC migrations (delete + rebind to a different PV) so the operator cannot race to provision a fresh empty volume. Annotation updates and size expansion still apply normally to an existing PVC — only creation is blocked. Safe migration workflow:
+
+```sh
+kubectl patch appdefinition my-app --type=merge -p '{"spec":{"disk":{"protect":true}}}'
+kubectl scale deployment my-app --replicas=0          # release the PVC-protection finalizer
+kubectl patch pv <pv-name> -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+kubectl delete pvc my-app-disk
+# create new PVC pointing at the retained PV, or let a new one provision
+kubectl scale deployment my-app --replicas=1
+kubectl patch appdefinition my-app --type=merge -p '{"spec":{"disk":{"protect":false}}}'
+```
+
 ### `configMaps`
 
 Inline ConfigMaps created and owned by the operator. Named `<app>-<name>`, mounted read-only in every container. Changing `data` triggers an automatic rolling restart via a pod template annotation that tracks a SHA-256 hash of all inline ConfigMap and Secret data.

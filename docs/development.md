@@ -127,6 +127,8 @@ Whenever inline `configMaps[].data` or `secrets[].data` (inline only, not `secre
 
 When `spec.disk.sizeInGi` increases, `reconcilePVC` patches `pvc.spec.resources.requests.storage` to the new value. The storage class must have `allowVolumeExpansion: true`. The actual filesystem resize is performed by the storage class's CSI driver; until it completes, the `DiskReady` condition shows `bound (Xgi, expanding to Ygi)`. Shrinking is not supported by Kubernetes.
 
+`disk.protect: true` prevents PVC **creation** while still allowing annotation updates and size expansion on the existing PVC. The guard is a pre-flight Get: if the PVC is absent and `protect` is set, the function logs and returns without entering `ctrl.CreateOrUpdate`. If the PVC exists, it falls through to the normal reconcile path — protect only blocks the `ResourceVersion == ""` (new-object) branch of `CreateOrUpdate`.
+
 The `DiskReady` condition message always reflects `pvc.status.capacity` (the size actually granted by the provisioner), not `pvc.spec.resources.requests` (the size requested). This distinction matters during an in-progress resize. The PVC is read via `APIReader` (bypasses the informer cache) to avoid a k3s-specific transient state where the cache briefly holds an intermediate capacity value during resize processing.
 
 ### ExternalSecrets Operator integration

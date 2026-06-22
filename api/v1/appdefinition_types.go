@@ -43,6 +43,10 @@ type DiskConfig struct {
 	// Annotations are added verbatim to the PVC metadata. Useful for storage-class-specific
 	// hints, backup policies, or custom tooling that selects PVCs by annotation.
 	Annotations map[string]string `json:"annotations,omitempty"`
+	// Protect skips PVC creation and modification when true. Use during PVC migrations
+	// or manual PV rebinding to prevent the operator from racing to recreate a deleted PVC.
+	// The rest of the AppDefinition (Deployment, Ingress, etc.) continues reconciling normally.
+	Protect bool `json:"protect,omitempty"`
 }
 
 type LoggingFile struct {
