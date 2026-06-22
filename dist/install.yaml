@@ -1474,6 +1474,12 @@ spec:
                       - subPath
                       type: object
                     type: array
+                  protect:
+                    description: |-
+                      Protect skips PVC creation and modification when true. Use during PVC migrations
+                      or manual PV rebinding to prevent the operator from racing to recreate a deleted PVC.
+                      The rest of the AppDefinition (Deployment, Ingress, etc.) continues reconciling normally.
+                    type: boolean
                   setFsGroup:
                     type: boolean
                   sizeInGi:
