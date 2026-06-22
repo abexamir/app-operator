@@ -20,6 +20,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"k8s.io/client-go/tools/record"
+
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -56,6 +58,7 @@ type AppDefinitionReconciler struct {
 	// where the cache can temporarily hold a stale intermediate value.
 	APIReader client.Reader
 	Scheme    *runtime.Scheme
+	Recorder  record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=appdefinition.abexamir.me,resources=appdefinitions,verbs=get;list;watch;create;update;patch;delete
@@ -688,6 +691,8 @@ func (r *AppDefinitionReconciler) reconcilePVC(ctx context.Context, appDef *v1.A
 		if err := r.Get(ctx, types.NamespacedName{Name: pvcName(appDef.Name), Namespace: appDef.Namespace}, existing); err != nil {
 			if apierrors.IsNotFound(err) {
 				logger.V(1).Info("disk.protect is true and PVC is absent, skipping creation")
+				r.Recorder.Event(appDef, corev1.EventTypeWarning, "DiskProtected",
+					fmt.Sprintf("PVC %s not found; disk.protect is true, operator will not recreate it", pvcName(appDef.Name)))
 				return nil
 			}
 			return fmt.Errorf("getting PVC: %w", err)
@@ -989,7 +994,12 @@ func (r *AppDefinitionReconciler) updateStatus(ctx context.Context, appDef *v1.A
 		pvcStatus := metav1.ConditionFalse
 		pvcReason := "Provisioning"
 		pvcMsg := "PVC is being provisioned"
-		if err := r.APIReader.Get(ctx, types.NamespacedName{Name: pvcName(appDef.Name), Namespace: appDef.Namespace}, pvc); err == nil {
+		if err := r.APIReader.Get(ctx, types.NamespacedName{Name: pvcName(appDef.Name), Namespace: appDef.Namespace}, pvc); err != nil {
+			if apierrors.IsNotFound(err) && appDef.Spec.Disk.Protect {
+				pvcReason = "Protected"
+				pvcMsg = fmt.Sprintf("PVC %s not found; disk.protect is true, operator will not recreate it", pvcName(appDef.Name))
+			}
+		} else {
 			if pvc.Status.Phase == corev1.ClaimBound {
 				pvcStatus = metav1.ConditionTrue
 				pvcReason = "Bound"

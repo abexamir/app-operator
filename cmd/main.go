@@ -206,6 +206,7 @@ func main() {
 		Client:    mgr.GetClient(),
 		APIReader: mgr.GetAPIReader(),
 		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("app-operator"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AppDefinition")
 		os.Exit(1)
