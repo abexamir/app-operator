@@ -1,0 +1,42 @@
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: eso-demo
+  namespace: default
+spec:
+  containers:
+    - name: web
+      image: nginx:1.25-alpine
+      ports:
+        - name: http
+          containerPort: 80
+          servicePort: 80
+          expose: true
+  replicas: 1
+
+  # Requires External Secrets Operator installed and a ClusterSecretStore named "my-vault".
+  # ESO reconciles each ExternalSecret into a Kubernetes Secret that the operator
+  # then mounts or injects — no plaintext values in this manifest.
+  externalSecrets:
+    - name: db-creds
+      store: my-vault
+      storeKind: ClusterSecretStore
+      refreshInterval: "1h"
+      asEnvVars: true
+      data:
+        - secretKey: DB_PASSWORD
+          remoteRef:
+            key: secret/data/myapp/db
+            property: password
+        - secretKey: DB_HOST
+          remoteRef:
+            key: secret/data/myapp/db
+            property: host
+
+    - name: tls-bundle
+      store: my-vault
+      storeKind: ClusterSecretStore
+      refreshInterval: "24h"
+      mountPath: /etc/tls
+      dataFrom:
+        - key: secret/data/myapp/tls

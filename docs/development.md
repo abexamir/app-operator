@@ -89,9 +89,10 @@ AppDefinition CR
        ▼
 AppDefinitionReconciler  (internal/controller/appdefinition_controller.go)
        │
-       ├── reconcileConfigMaps()     → ConfigMap   (one per configMaps[], named <app>-<name>)
-       ├── reconcileSecrets()        → Secret      (one per inline secrets[]; secretRef entries skipped)
-       ├── reconcileDeployment()     → Deployment  (init containers, containers, volumes, probes,
+       ├── reconcileConfigMaps()     → ConfigMap      (one per configMaps[], named <app>-<name>)
+       ├── reconcileSecrets()        → Secret        (one per inline secrets[]; secretRef entries skipped)
+       ├── reconcileExternalSecrets()→ ExternalSecret (one per externalSecrets[]; skipped if ESO absent)
+       ├── reconcileDeployment()     → Deployment    (init containers, containers, volumes, probes,
        │                                            lifecycle, config-hash annotation, scheduling)
        ├── reconcileService()        → Service     (expose:true ports; serviceType)
        ├── reconcilePVC()            → PVC         (create; expand when sizeInGi increases)
@@ -127,6 +128,21 @@ Whenever inline `configMaps[].data` or `secrets[].data` (inline only, not `secre
 When `spec.disk.sizeInGi` increases, `reconcilePVC` patches `pvc.spec.resources.requests.storage` to the new value. The storage class must have `allowVolumeExpansion: true`. The actual filesystem resize is performed by the storage class's CSI driver; until it completes, the `DiskReady` condition shows `bound (Xgi, expanding to Ygi)`. Shrinking is not supported by Kubernetes.
 
 The `DiskReady` condition message always reflects `pvc.status.capacity` (the size actually granted by the provisioner), not `pvc.spec.resources.requests` (the size requested). This distinction matters during an in-progress resize. The PVC is read via `APIReader` (bypasses the informer cache) to avoid a k3s-specific transient state where the cache briefly holds an intermediate capacity value during resize processing.
+
+### ExternalSecrets Operator integration
+
+`spec.externalSecrets[]` creates `ExternalSecret` objects (external-secrets.io/v1) via `unstructured.Unstructured` — same pattern as `ServiceMonitor`. If the ESO CRDs are not installed, `apimeta.IsNoMatchError` is caught and the step is silently skipped.
+
+The existence check uses `r.APIReader.Get` (bypasses the informer cache) rather than `r.Get`, because the informer cache only has informers for types registered in the scheme. Since `ExternalSecret` is not in the scheme (unstructured access to avoid a hard dependency), the cached client returns `NoMatchError` even when the CRD is present. `APIReader` goes directly to the API server and performs discovery on each call.
+
+Each `ExternalSecret` is named `<app>-<name>`, carries standard labels, and has an owner reference pointing to the `AppDefinition` — so it is garbage-collected when the AppDefinition is deleted. ESO owns the resulting Kubernetes Secret (via `creationPolicy: Owner`).
+
+The Deployment mounts or injects the resulting Secret through `buildVolumes` and `buildVolumeMounts` exactly like any other Secret — `mountPath` for file mounting, `asEnvVars` for environment variable injection.
+
+Install ESO CRDs with `--server-side` to avoid the kubectl annotation size limit:
+```sh
+kubectl apply -f https://raw.githubusercontent.com/external-secrets/external-secrets/v2.6.0/deploy/crds/bundle.yaml --server-side --force-conflicts
+```
 
 ### External Secret references
 
@@ -188,6 +204,7 @@ Generated from `// +kubebuilder:rbac:...` markers in `appdefinition_controller.g
 | `networking.k8s.io` | `ingresses` | full |
 | `autoscaling` | `horizontalpodautoscalers` | full |
 | `monitoring.coreos.com` | `servicemonitors` | full |
+| `external-secrets.io` | `externalsecrets` | full |
 
 ---
 

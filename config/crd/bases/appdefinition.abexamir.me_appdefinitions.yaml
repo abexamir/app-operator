@@ -1506,6 +1506,112 @@ spec:
                   - tls
                   type: object
                 type: array
+              externalSecrets:
+                description: |-
+                  ExternalSecrets creates ExternalSecret resources (external-secrets.io/v1beta1) that ESO
+                  syncs from a SecretStore or ClusterSecretStore into Kubernetes Secrets. The operator then
+                  mounts or injects those Secrets identically to inline secrets — without storing any values
+                  in the AppDefinition manifest. Silently skipped if the ESO CRDs are not installed.
+                items:
+                  description: |-
+                    ExternalSecretMount creates an ExternalSecret (external-secrets.io/v1beta1) that ESO
+                    syncs into a Kubernetes Secret named "<app>-<name>". The resulting Secret is then
+                    mounted or injected exactly like an inline secret — but its values never appear in
+                    the AppDefinition manifest.
+
+                    At least one of Data or DataFrom must be set.
+                  properties:
+                    asEnvVars:
+                      description: AsEnvVars injects all keys of the resulting Secret
+                        as environment variables into all containers.
+                      type: boolean
+                    data:
+                      description: Data maps individual remote keys to keys in the
+                        resulting Secret.
+                      items:
+                        description: ExternalSecretData maps one remote key to one
+                          key in the resulting Kubernetes Secret.
+                        properties:
+                          remoteRef:
+                            description: RemoteRef points to the value in the external
+                              store.
+                            properties:
+                              key:
+                                description: Key is the path or name of the secret
+                                  in the store (e.g. "secret/data/myapp/db").
+                                type: string
+                              property:
+                                description: Property is an optional sub-key within
+                                  the secret (e.g. "password" for a KV map).
+                                type: string
+                              version:
+                                description: Version pins to a specific version of
+                                  the secret. Omit for the latest.
+                                type: string
+                            required:
+                            - key
+                            type: object
+                          secretKey:
+                            description: SecretKey is the key that will appear in
+                              the resulting Kubernetes Secret.
+                            type: string
+                        required:
+                        - remoteRef
+                        - secretKey
+                        type: object
+                      type: array
+                    dataFrom:
+                      description: DataFrom bulk-imports all keys from a remote path
+                        into the resulting Secret.
+                      items:
+                        description: ExternalSecretDataFrom bulk-imports all keys
+                          from a single path in the store.
+                        properties:
+                          key:
+                            description: Key is the store path whose contents are
+                              extracted wholesale into the Secret.
+                            type: string
+                          version:
+                            description: Version pins to a specific version. Omit
+                              for the latest.
+                            type: string
+                        required:
+                        - key
+                        type: object
+                      type: array
+                    mountPath:
+                      description: MountPath mounts the resulting Secret as a directory
+                        of files into all containers.
+                      type: string
+                    name:
+                      description: Name identifies this entry. The ExternalSecret
+                        and resulting Secret are named "<app>-<name>".
+                      type: string
+                    refreshInterval:
+                      default: 1h
+                      description: RefreshInterval controls how often ESO re-reads
+                        the external store. Defaults to "1h".
+                      type: string
+                    store:
+                      description: Store is the name of the SecretStore or ClusterSecretStore
+                        to read from.
+                      type: string
+                    storeKind:
+                      default: ClusterSecretStore
+                      description: StoreKind is "SecretStore" or "ClusterSecretStore".
+                        Defaults to "ClusterSecretStore".
+                      enum:
+                      - SecretStore
+                      - ClusterSecretStore
+                      type: string
+                  required:
+                  - name
+                  - store
+                  type: object
+                  x-kubernetes-validations:
+                  - message: at least one of data or dataFrom must be set
+                    rule: size(self.data) > 0 || size(self.dataFrom) > 0
+                type: array
               imagePullSecrets:
                 description: ImagePullSecrets are references to secrets in the same
                   namespace for pulling container images.

@@ -147,6 +147,62 @@ type AutoscalingSpec struct {
 // Inline ConfigMaps and Secrets
 // ---------------------------------------
 
+// ExternalSecretRemoteRef points to a specific key inside an external secret store.
+type ExternalSecretRemoteRef struct {
+	// Key is the path or name of the secret in the store (e.g. "secret/data/myapp/db").
+	Key string `json:"key"`
+	// Property is an optional sub-key within the secret (e.g. "password" for a KV map).
+	Property string `json:"property,omitempty"`
+	// Version pins to a specific version of the secret. Omit for the latest.
+	Version string `json:"version,omitempty"`
+}
+
+// ExternalSecretData maps one remote key to one key in the resulting Kubernetes Secret.
+type ExternalSecretData struct {
+	// SecretKey is the key that will appear in the resulting Kubernetes Secret.
+	SecretKey string `json:"secretKey"`
+	// RemoteRef points to the value in the external store.
+	RemoteRef ExternalSecretRemoteRef `json:"remoteRef"`
+}
+
+// ExternalSecretDataFrom bulk-imports all keys from a single path in the store.
+type ExternalSecretDataFrom struct {
+	// Key is the store path whose contents are extracted wholesale into the Secret.
+	Key string `json:"key"`
+	// Version pins to a specific version. Omit for the latest.
+	Version string `json:"version,omitempty"`
+}
+
+// ExternalSecretMount creates an ExternalSecret (external-secrets.io/v1beta1) that ESO
+// syncs into a Kubernetes Secret named "<app>-<name>". The resulting Secret is then
+// mounted or injected exactly like an inline secret — but its values never appear in
+// the AppDefinition manifest.
+//
+// At least one of Data or DataFrom must be set.
+//
+// +kubebuilder:validation:XValidation:rule="size(self.data) > 0 || size(self.dataFrom) > 0",message="at least one of data or dataFrom must be set"
+type ExternalSecretMount struct {
+	// Name identifies this entry. The ExternalSecret and resulting Secret are named "<app>-<name>".
+	Name string `json:"name"`
+	// Store is the name of the SecretStore or ClusterSecretStore to read from.
+	Store string `json:"store"`
+	// StoreKind is "SecretStore" or "ClusterSecretStore". Defaults to "ClusterSecretStore".
+	// +kubebuilder:default=ClusterSecretStore
+	// +kubebuilder:validation:Enum=SecretStore;ClusterSecretStore
+	StoreKind string `json:"storeKind,omitempty"`
+	// RefreshInterval controls how often ESO re-reads the external store. Defaults to "1h".
+	// +kubebuilder:default="1h"
+	RefreshInterval string `json:"refreshInterval,omitempty"`
+	// MountPath mounts the resulting Secret as a directory of files into all containers.
+	MountPath string `json:"mountPath,omitempty"`
+	// AsEnvVars injects all keys of the resulting Secret as environment variables into all containers.
+	AsEnvVars bool `json:"asEnvVars,omitempty"`
+	// Data maps individual remote keys to keys in the resulting Secret.
+	Data []ExternalSecretData `json:"data,omitempty"`
+	// DataFrom bulk-imports all keys from a remote path into the resulting Secret.
+	DataFrom []ExternalSecretDataFrom `json:"dataFrom,omitempty"`
+}
+
 // ConfigMapMount defines a ConfigMap whose content is embedded directly in the AppDefinition.
 // The operator creates and owns a ConfigMap named "<appname>-<name>" and mounts it at MountPath
 // in every container.
@@ -238,6 +294,11 @@ type AppDefinitionSpec struct {
 	// Secrets defines inline or externally-referenced Secrets.
 	// Use MountPath to mount as files and/or AsEnvVars to inject as environment variables.
 	Secrets []SecretMount `json:"secrets,omitempty"`
+	// ExternalSecrets creates ExternalSecret resources (external-secrets.io/v1beta1) that ESO
+	// syncs from a SecretStore or ClusterSecretStore into Kubernetes Secrets. The operator then
+	// mounts or injects those Secrets identically to inline secrets — without storing any values
+	// in the AppDefinition manifest. Silently skipped if the ESO CRDs are not installed.
+	ExternalSecrets []ExternalSecretMount `json:"externalSecrets,omitempty"`
 }
 
 // ---------------------------------------

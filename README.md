@@ -76,6 +76,7 @@ kubectl delete -f https://raw.githubusercontent.com/abexamir/app-operator/main/d
 | `configMaps[]` | `ConfigMap` per entry (operator-owned) |
 | `secrets[]` with `data` | `Secret` per entry (operator-owned) |
 | `secrets[]` with `secretRef` | No resource created — existing Secret is referenced |
+| `externalSecrets[]` | `ExternalSecret` per entry (requires External Secrets Operator) |
 | `monitoringConfig.enabled: true` | `ServiceMonitor` (requires prometheus-operator) |
 
 All operator-owned child resources are garbage-collected when the `AppDefinition` is deleted.
@@ -305,6 +306,48 @@ secrets:
 
 > **Warning**: Inline `data` is stored in plain text in the AppDefinition spec and in etcd. For production, prefer `secretRef` pointing to a Secret managed by [External Secrets Operator](https://external-secrets.io) or [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets).
 
+### `externalSecrets`
+
+Requires [External Secrets Operator](https://external-secrets.io) (ESO) installed in the cluster. Each entry creates an `ExternalSecret` object; ESO reconciles it into a Kubernetes `Secret` that the operator then mounts or injects like any other Secret — without storing sensitive values in the AppDefinition manifest.
+
+```yaml
+externalSecrets:
+  # Pull specific keys from a secret in Vault via ClusterSecretStore
+  - name: db-creds
+    store: my-vault                  # name of the SecretStore or ClusterSecretStore
+    storeKind: ClusterSecretStore    # default; use "SecretStore" for namespace-scoped
+    refreshInterval: "1h"            # how often ESO re-syncs from the backend
+    asEnvVars: true                  # inject all keys as env vars into every container
+    data:
+      - secretKey: DB_PASSWORD       # key name in the resulting Kubernetes Secret
+        remoteRef:
+          key: secret/data/myapp/db  # path in the backend (Vault, SSM, etc.)
+          property: password         # sub-key within the backend secret
+
+  # Pull an entire secret object and mount it as files
+  - name: tls-bundle
+    store: my-vault
+    mountPath: /etc/tls
+    dataFrom:
+      - key: secret/data/myapp/tls  # all keys become files at mountPath
+
+  # Use both data and dataFrom at the same time
+  - name: app-secrets
+    store: aws-ssm
+    storeKind: SecretStore
+    refreshInterval: "30m"
+    asEnvVars: true
+    mountPath: /etc/secrets
+    data:
+      - secretKey: API_KEY
+        remoteRef:
+          key: /myapp/api-key
+    dataFrom:
+      - key: /myapp/config
+```
+
+The resulting Kubernetes Secret is named `<app>-<name>` and is owned by the `ExternalSecret`. ESO manages its lifecycle; the operator does not delete or modify it directly. If ESO is not installed, this step is silently skipped (same pattern as `monitoringConfig`).
+
 ### `imagePullSecrets`
 
 References to pre-existing Secrets for pulling private images.
@@ -453,6 +496,7 @@ kubectl apply -f config/samples/appdefinition_v1_sidecar_demo.yaml
 | `sidecar_demo` | nginx + metrics-exporter + log-shipper sidecars with ServiceMonitor |
 | `private_registry_demo` | imagePullSecrets for a private registry |
 | `paused_demo` | Suspended reconciliation |
+| `eso_demo` | ExternalSecrets Operator integration with ClusterSecretStore |
 | `complex_app` | Multi-container with PVC, ConfigMaps, Secrets, monitoring, ingress |
 
 ---
