@@ -105,6 +105,18 @@ type MonitoringConfig struct {
 	Labels         map[string]string `json:"labels,omitempty"`
 }
 
+// MetricsSpec configures Prometheus scraping for the application.
+// When enabled, the operator creates a ServiceMonitor targeting the first exposed port.
+// Silently skipped if the prometheus-operator CRDs are not installed.
+type MetricsSpec struct {
+	// Enabled controls whether a ServiceMonitor is created for this app.
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled"`
+	// Path is the HTTP path Prometheus will scrape. Defaults to /metrics.
+	// +kubebuilder:default="/metrics"
+	Path string `json:"path,omitempty"`
+}
+
 // ---------------------------------------
 // Containers
 // ---------------------------------------
@@ -278,6 +290,7 @@ type AppDefinitionSpec struct {
 	Disk               *DiskConfig                `json:"disk,omitempty"`
 	LoggingConfig      *LoggingConfig             `json:"loggingConfig,omitempty"`
 	MonitoringConfig   *MonitoringConfig          `json:"monitoringConfig,omitempty"`
+	Metrics            *MetricsSpec               `json:"metrics,omitempty"`
 	Lifecycle          *LifecycleSpec             `json:"lifecycle,omitempty"`
 	SecurityContext    *corev1.PodSecurityContext `json:"securityContext,omitempty"`
 	ServiceType        corev1.ServiceType         `json:"serviceType,omitempty"`

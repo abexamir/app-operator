@@ -21,15 +21,15 @@ var serviceMonitorGVK = schema.GroupVersionKind{
 	Kind:    "ServiceMonitor",
 }
 
-// reconcileServiceMonitor creates or updates a ServiceMonitor when monitoringConfig.enabled
-// is true and at least one port has a metricsPath set.  When the prometheus-operator CRDs
-// are not installed the call is silently skipped — the app still works, just without
-// Prometheus scraping.
+// reconcileServiceMonitor creates or updates a ServiceMonitor when metrics.enabled is true.
+// When the prometheus-operator CRDs are not installed the call is silently skipped — the app
+// still works, just without Prometheus scraping.
 func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, appDef *v1.AppDefinition) error {
 	logger := log.FromContext(ctx)
 	smKey := types.NamespacedName{Name: appDef.Name, Namespace: appDef.Namespace}
 
-	enabled := appDef.Spec.MonitoringConfig != nil && appDef.Spec.MonitoringConfig.Enabled
+	enabled := (appDef.Spec.Metrics != nil && appDef.Spec.Metrics.Enabled) ||
+		(appDef.Spec.MonitoringConfig != nil && appDef.Spec.MonitoringConfig.Enabled)
 	endpoints := buildSMEndpoints(appDef)
 
 	existing := &unstructured.Unstructured{}
@@ -47,13 +47,15 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 		return err
 	}
 
-	// Build labels merging standard labels with user-supplied monitoring labels.
+	// Build labels: standard labels plus any extra labels from monitoringConfig.
 	labels := make(map[string]interface{})
 	for k, v := range standardLabels(appDef.Name) {
 		labels[k] = v
 	}
-	for k, v := range appDef.Spec.MonitoringConfig.Labels {
-		labels[k] = v
+	if appDef.Spec.MonitoringConfig != nil {
+		for k, v := range appDef.Spec.MonitoringConfig.Labels {
+			labels[k] = v
+		}
 	}
 
 	desired := &unstructured.Unstructured{
@@ -108,8 +110,29 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 	return r.Update(ctx, desired)
 }
 
-// buildSMEndpoints returns the list of scrape endpoints from ports that have metricsPath set.
+// buildSMEndpoints builds the Prometheus scrape endpoint list for the ServiceMonitor.
+// The new metrics field takes precedence: it creates one endpoint on the first exposed port.
+// Falls back to the legacy per-port metricsPath approach when metrics is not set.
 func buildSMEndpoints(appDef *v1.AppDefinition) []interface{} {
+	if appDef.Spec.Metrics != nil && appDef.Spec.Metrics.Enabled {
+		path := appDef.Spec.Metrics.Path
+		if path == "" {
+			path = "/metrics"
+		}
+		for _, c := range appDef.Spec.Containers {
+			for _, p := range c.Ports {
+				if p.Expose {
+					return []interface{}{map[string]interface{}{
+						"port": p.Name,
+						"path": path,
+					}}
+				}
+			}
+		}
+		return nil
+	}
+
+	// Legacy: per-port metricsPath driven by monitoringConfig.
 	var endpoints []interface{}
 	seen := map[string]bool{}
 	for _, c := range appDef.Spec.Containers {
