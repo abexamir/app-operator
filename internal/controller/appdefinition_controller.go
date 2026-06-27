@@ -182,38 +182,26 @@ func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDe
 		}
 
 		deployment.Labels = standardLabels(appDef.Name)
-		deployment.Spec = appsv1.DeploymentSpec{
-			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{
+		deployment.Spec.Replicas = &replicas
+		// Selector is immutable after creation; only set it on new deployments.
+		if deployment.Spec.Selector == nil {
+			deployment.Spec.Selector = &metav1.LabelSelector{
 				MatchLabels: selectorLabels(appDef.Name),
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels:      selectorLabels(appDef.Name),
-					Annotations: podTemplateAnnotations(appDef),
-				},
-				Spec: corev1.PodSpec{},
-			},
+			}
 		}
+		deployment.Spec.Template.Labels = selectorLabels(appDef.Name)
+		deployment.Spec.Template.Annotations = podTemplateAnnotations(appDef)
 
+		// Surgical pod spec update: only touch fields the operator owns.
+		// Preserving the existing PodSpec keeps Kubernetes-injected defaults
+		// (DNSPolicy, RestartPolicy, etc.) in place across reconciles so that
+		// equality.Semantic.DeepEqual does not see a spurious diff.
 		podSpec := &deployment.Spec.Template.Spec
-
-		if appDef.Spec.SecurityContext != nil {
-			podSpec.SecurityContext = appDef.Spec.SecurityContext
-		}
-		if len(appDef.Spec.NodeSelector) > 0 {
-			podSpec.NodeSelector = appDef.Spec.NodeSelector
-		}
-		if len(appDef.Spec.Tolerations) > 0 {
-			podSpec.Tolerations = appDef.Spec.Tolerations
-		}
-		if appDef.Spec.Affinity != nil {
-			podSpec.Affinity = appDef.Spec.Affinity
-		}
-		if len(appDef.Spec.ImagePullSecrets) > 0 {
-			podSpec.ImagePullSecrets = appDef.Spec.ImagePullSecrets
-		}
-
+		podSpec.SecurityContext = appDef.Spec.SecurityContext
+		podSpec.NodeSelector = appDef.Spec.NodeSelector
+		podSpec.Tolerations = appDef.Spec.Tolerations
+		podSpec.Affinity = appDef.Spec.Affinity
+		podSpec.ImagePullSecrets = appDef.Spec.ImagePullSecrets
 		podSpec.Volumes = buildVolumes(appDef)
 		podSpec.InitContainers = buildInitContainers(appDef)
 		podSpec.Containers = buildContainers(appDef)
@@ -318,6 +306,7 @@ func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
 	}
 
 	for _, cm := range appDef.Spec.ConfigMaps {
+		mode := int32(0644)
 		volumes = append(volumes, corev1.Volume{
 			Name: "cm-" + cm.Name,
 			VolumeSource: corev1.VolumeSource{
@@ -325,6 +314,7 @@ func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
 					LocalObjectReference: corev1.LocalObjectReference{
 						Name: appDef.Name + "-" + cm.Name,
 					},
+					DefaultMode: &mode,
 				},
 			},
 		})
@@ -334,11 +324,13 @@ func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
 		if sec.MountPath == "" {
 			continue
 		}
+		mode := int32(0644)
 		volumes = append(volumes, corev1.Volume{
 			Name: "secret-" + sec.Name,
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: resolvedSecretName(appDef.Name, sec),
+					SecretName:  resolvedSecretName(appDef.Name, sec),
+					DefaultMode: &mode,
 				},
 			},
 		})
@@ -348,11 +340,13 @@ func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
 		if es.MountPath == "" {
 			continue
 		}
+		mode := int32(0644)
 		volumes = append(volumes, corev1.Volume{
 			Name: "es-" + es.Name,
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: appDef.Name + "-" + es.Name,
+					SecretName:  appDef.Name + "-" + es.Name,
+					DefaultMode: &mode,
 				},
 			},
 		})
@@ -427,6 +421,11 @@ func buildContainer(appDef *v1.AppDefinition, c v1.ContainerSpec, isPrimary bool
 		Command: c.Command,
 		Args:    c.Args,
 		Env:     c.Env,
+		// Explicitly match Kubernetes admission defaults so DeepEqual is stable
+		// across reconciles (avoids a storm where K8s re-defaults on every update).
+		ImagePullPolicy:          corev1.PullIfNotPresent,
+		TerminationMessagePath:   "/dev/termination-log",
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 	}
 
 	for _, p := range c.Ports {
@@ -507,11 +506,14 @@ func buildInitContainers(appDef *v1.AppDefinition) []corev1.Container {
 	containers := make([]corev1.Container, 0, len(appDef.Spec.InitContainers))
 	for _, c := range appDef.Spec.InitContainers {
 		container := corev1.Container{
-			Name:    c.Name,
-			Image:   c.Image,
-			Command: c.Command,
-			Args:    c.Args,
-			Env:     c.Env,
+			Name:                     c.Name,
+			Image:                    c.Image,
+			Command:                  c.Command,
+			Args:                     c.Args,
+			Env:                      c.Env,
+			ImagePullPolicy:          corev1.PullIfNotPresent,
+			TerminationMessagePath:   "/dev/termination-log",
+			TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		}
 		if len(c.Resources.Requests) > 0 || len(c.Resources.Limits) > 0 {
 			container.Resources = c.Resources
@@ -547,7 +549,7 @@ func buildInitContainers(appDef *v1.AppDefinition) []corev1.Container {
 }
 
 func buildProbe(p *v1.Probe) *corev1.Probe {
-	return &corev1.Probe{
+	probe := &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet:   p.HTTPGet,
 			TCPSocket: p.TCPSocket,
@@ -559,6 +561,24 @@ func buildProbe(p *v1.Probe) *corev1.Probe {
 		FailureThreshold:    p.FailureThreshold,
 		SuccessThreshold:    p.SuccessThreshold,
 	}
+	// Apply the same defaults Kubernetes admission would set so that
+	// DeepEqual is stable when the user omits these fields.
+	if probe.PeriodSeconds == 0 {
+		probe.PeriodSeconds = 10
+	}
+	if probe.TimeoutSeconds == 0 {
+		probe.TimeoutSeconds = 1
+	}
+	if probe.SuccessThreshold == 0 {
+		probe.SuccessThreshold = 1
+	}
+	if probe.FailureThreshold == 0 {
+		probe.FailureThreshold = 3
+	}
+	if probe.ProbeHandler.HTTPGet != nil && probe.ProbeHandler.HTTPGet.Scheme == "" {
+		probe.ProbeHandler.HTTPGet.Scheme = corev1.URISchemeHTTP
+	}
+	return probe
 }
 
 // ----------------------------------------------------------------
@@ -664,7 +684,13 @@ func (r *AppDefinitionReconciler) reconcileSecrets(ctx context.Context, appDef *
 		op, err := ctrl.CreateOrUpdate(ctx, r.Client, obj, func() error {
 			obj.Labels = standardLabels(appDef.Name)
 			obj.Type = corev1.SecretTypeOpaque
-			obj.StringData = sec.Data
+			// StringData is write-only: Kubernetes converts it to Data on storage
+			// and clears it, so reading back always produces nil StringData.
+			// Write to Data directly to get stable DeepEqual comparisons.
+			obj.Data = make(map[string][]byte, len(sec.Data))
+			for k, v := range sec.Data {
+				obj.Data[k] = []byte(v)
+			}
 			return ctrl.SetControllerReference(appDef, obj, r.Scheme)
 		})
 		if err != nil {
@@ -1318,7 +1344,7 @@ func buildSMEndpoints(appDef *v1.AppDefinition) []interface{} {
 				"port": p.Name,
 				"path": p.MetricsPath,
 			}
-			if appDef.Spec.MonitoringConfig.ScrapeInterval != "" {
+			if appDef.Spec.MonitoringConfig != nil && appDef.Spec.MonitoringConfig.ScrapeInterval != "" {
 				ep["interval"] = appDef.Spec.MonitoringConfig.ScrapeInterval
 			}
 			endpoints = append(endpoints, ep)

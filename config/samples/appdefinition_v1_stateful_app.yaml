@@ -6,8 +6,8 @@ metadata:
 spec:
   initContainers:
     - name: init-data
-      image: busybox:1.36
-      command: ["/bin/sh", "-c", "cp /defaults/* /data/ 2>/dev/null || true"]
+      image: docker.zarrino.tech/busybox:1.36
+      command: ["/bin/sh", "-c", "mkdir -p /data /logs"]
       resources:
         requests:
           cpu: "50m"
@@ -15,7 +15,13 @@ spec:
 
   containers:
     - name: db
-      image: postgres:16-alpine
+      image: docker.zarrino.tech/postgres:16
+      env:
+        # Tell postgres to use the mounted PVC as its data directory.
+        # Without PGDATA, postgres defaults to /var/lib/postgresql/data (inside
+        # the container image) and cannot chmod it when running as non-root.
+        - name: PGDATA
+          value: /data
       ports:
         - name: postgres
           containerPort: 5432
@@ -31,7 +37,7 @@ spec:
       readinessProbe:
         type: exec
         exec:
-          command: ["pg_isready", "-U", "postgres"]
+          command: ["pg_isready", "-U", "app"]
         initialDelaySeconds: 10
         periodSeconds: 5
         failureThreshold: 6
@@ -44,18 +50,13 @@ spec:
         timeoutSeconds: 5
         failureThreshold: 3
 
-  lifecycle:
-    postStart:
-      exec:
-        command: ["/bin/sh", "-c", "psql -c 'CREATE TABLE IF NOT EXISTS _ready (id int)'"]
-
   # disk forces replicas: 1 — ReadWriteOnce PVCs allow a single writer
   replicas: 1
   # paused: true  # uncomment to suspend all reconciliation during maintenance
 
   disk:
     sizeInGi: 20
-    storageClassName: standard
+    storageClassName: local-path
     setFsGroup: true   # injects securityContext.fsGroup so the PVC is group-writable
     # protect: true  # uncomment while migrating the PVC — prevents recreation if the PVC
     #                # is absent; annotation updates and size expansion still apply normally
@@ -105,18 +106,8 @@ spec:
         API_KEY: "abc123"
         API_SECRET: "xyz789"
 
-    # external reference: mount a pre-existing Secret as files (not created by operator)
-    - name: external-tls
-      mountPath: /etc/external/tls
-      secretRef: vault-agent-tls
-
-    # external reference: inject a pre-existing Secret as env vars
-    - name: external-db
-      asEnvVars: true
-      secretRef: prod-db-credentials
-
   securityContext:
-    runAsUser: 999
-    runAsGroup: 999
-    runAsNonRoot: true
-    fsGroup: 999   # postgres needs group write access to /data
+    # fsGroup ensures the PVC is group-writable by the postgres GID (999 on Debian postgres:16).
+    # Do NOT set runAsUser/runAsNonRoot here — the postgres entrypoint must start as root
+    # to chown/chmod PGDATA, then internally gosu's to the postgres user (UID 999).
+    fsGroup: 999
