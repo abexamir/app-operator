@@ -109,9 +109,6 @@ spec:
         DB_PASSWORD: "changeme"
         API_KEY: "abc123"
 
-  imagePullSecrets:
-    - name: ghcr-token
-
   securityContext:
     runAsNonRoot: true
     runAsUser: 1000
