@@ -28,7 +28,7 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 	logger := log.FromContext(ctx)
 	smKey := types.NamespacedName{Name: appDef.Name, Namespace: appDef.Namespace}
 
-	enabled := (appDef.Spec.Metrics != nil && appDef.Spec.Metrics.Enabled) ||
+	enabled := hasMetricsEnabled(appDef) ||
 		(appDef.Spec.MonitoringConfig != nil && appDef.Spec.MonitoringConfig.Enabled)
 	endpoints := buildSMEndpoints(appDef)
 
@@ -110,26 +110,41 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 	return r.Update(ctx, desired)
 }
 
-// buildSMEndpoints builds the Prometheus scrape endpoint list for the ServiceMonitor.
-// The new metrics field takes precedence: it creates one endpoint on the first exposed port.
-// Falls back to the legacy per-port metricsPath approach when metrics is not set.
-func buildSMEndpoints(appDef *v1.AppDefinition) []interface{} {
-	if appDef.Spec.Metrics != nil && appDef.Spec.Metrics.Enabled {
-		path := appDef.Spec.Metrics.Path
-		if path == "" {
-			path = "/metrics"
-		}
-		for _, c := range appDef.Spec.Containers {
-			for _, p := range c.Ports {
-				if p.Expose {
-					return []interface{}{map[string]interface{}{
-						"port": p.Name,
-						"path": path,
-					}}
-				}
+// hasMetricsEnabled reports whether any port across all containers has metrics.enabled = true.
+func hasMetricsEnabled(appDef *v1.AppDefinition) bool {
+	for _, c := range appDef.Spec.Containers {
+		for _, p := range c.Ports {
+			if p.Metrics != nil && p.Metrics.Enabled {
+				return true
 			}
 		}
-		return nil
+	}
+	return false
+}
+
+// buildSMEndpoints builds the Prometheus scrape endpoint list for the ServiceMonitor.
+// Port-level metrics fields take precedence over the legacy per-port metricsPath approach.
+func buildSMEndpoints(appDef *v1.AppDefinition) []interface{} {
+	if hasMetricsEnabled(appDef) {
+		var endpoints []interface{}
+		seen := map[string]bool{}
+		for _, c := range appDef.Spec.Containers {
+			for _, p := range c.Ports {
+				if p.Metrics == nil || !p.Metrics.Enabled || seen[p.Name] {
+					continue
+				}
+				seen[p.Name] = true
+				path := p.Metrics.Path
+				if path == "" {
+					path = "/metrics"
+				}
+				endpoints = append(endpoints, map[string]interface{}{
+					"port": p.Name,
+					"path": path,
+				})
+			}
+		}
+		return endpoints
 	}
 
 	// Legacy: per-port metricsPath driven by monitoringConfig.

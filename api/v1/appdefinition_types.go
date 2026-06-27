@@ -10,12 +10,13 @@ import (
 // ---------------------------------------
 
 type PortSpec struct {
-	Name          string `json:"name"`
-	ContainerPort int32  `json:"containerPort"`
-	ServicePort   int32  `json:"servicePort"`
-	Protocol      string `json:"protocol,omitempty"`
-	Expose        bool   `json:"expose,omitempty"`
-	MetricsPath   string `json:"metricsPath,omitempty"`
+	Name          string       `json:"name"`
+	ContainerPort int32        `json:"containerPort"`
+	ServicePort   int32        `json:"servicePort"`
+	Protocol      string       `json:"protocol,omitempty"`
+	Expose        bool         `json:"expose,omitempty"`
+	MetricsPath   string       `json:"metricsPath,omitempty"`
+	Metrics       *MetricsSpec `json:"metrics,omitempty"`
 }
 
 type Probe struct {
@@ -290,7 +291,6 @@ type AppDefinitionSpec struct {
 	Disk               *DiskConfig                `json:"disk,omitempty"`
 	LoggingConfig      *LoggingConfig             `json:"loggingConfig,omitempty"`
 	MonitoringConfig   *MonitoringConfig          `json:"monitoringConfig,omitempty"`
-	Metrics            *MetricsSpec               `json:"metrics,omitempty"`
 	Lifecycle          *LifecycleSpec             `json:"lifecycle,omitempty"`
 	SecurityContext    *corev1.PodSecurityContext `json:"securityContext,omitempty"`
 	ServiceType        corev1.ServiceType         `json:"serviceType,omitempty"`
