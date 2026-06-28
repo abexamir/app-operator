@@ -2777,7 +2777,7 @@ spec:
         - --health-probe-bind-address=:8081
         command:
         - /manager
-        image: controller:develop
+        image: ghcr.io/abexamir/app-operator:latest
         livenessProbe:
           httpGet:
             path: /healthz
