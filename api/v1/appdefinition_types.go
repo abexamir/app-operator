@@ -15,7 +15,6 @@ type PortSpec struct {
 	ServicePort   int32        `json:"servicePort"`
 	Protocol      string       `json:"protocol,omitempty"`
 	Expose        bool         `json:"expose,omitempty"`
-	MetricsPath   string       `json:"metricsPath,omitempty"`
 	Metrics       *MetricsSpec `json:"metrics,omitempty"`
 }
 
@@ -100,22 +99,20 @@ type LoggingConfig struct {
 	Files  []LoggingFile  `json:"files,omitempty"`
 }
 
-type MonitoringConfig struct {
-	Enabled        bool              `json:"enabled"`
-	ScrapeInterval string            `json:"scrapeInterval,omitempty"`
-	Labels         map[string]string `json:"labels,omitempty"`
-}
-
-// MetricsSpec configures Prometheus scraping for the application.
-// When enabled, the operator creates a ServiceMonitor targeting the first exposed port.
+// MetricsSpec configures Prometheus scraping for a port.
+// When enabled, the operator adds an endpoint to the app's ServiceMonitor.
 // Silently skipped if the prometheus-operator CRDs are not installed.
 type MetricsSpec struct {
-	// Enabled controls whether a ServiceMonitor is created for this app.
+	// Enabled adds this port as a ServiceMonitor scrape endpoint.
 	// +kubebuilder:default=false
 	Enabled bool `json:"enabled"`
 	// Path is the HTTP path Prometheus will scrape. Defaults to /metrics.
 	// +kubebuilder:default="/metrics"
 	Path string `json:"path,omitempty"`
+	// Interval is the Prometheus scrape interval for this endpoint (e.g. "15s", "30s").
+	Interval string `json:"interval,omitempty"`
+	// Labels are merged onto the ServiceMonitor metadata (e.g. release: prometheus-stack).
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // ---------------------------------------
@@ -290,7 +287,6 @@ type AppDefinitionSpec struct {
 	Domains            []DomainSpec               `json:"domains,omitempty"`
 	Disk               *DiskConfig                `json:"disk,omitempty"`
 	LoggingConfig      *LoggingConfig             `json:"loggingConfig,omitempty"`
-	MonitoringConfig   *MonitoringConfig          `json:"monitoringConfig,omitempty"`
 	Lifecycle          *LifecycleSpec             `json:"lifecycle,omitempty"`
 	SecurityContext    *corev1.PodSecurityContext `json:"securityContext,omitempty"`
 	ServiceType        corev1.ServiceType         `json:"serviceType,omitempty"`

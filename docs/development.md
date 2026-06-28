@@ -168,7 +168,7 @@ This works with any source that creates Kubernetes Secrets: External Secrets Ope
 
 ### ServiceMonitor
 
-`ServiceMonitor` (monitoring.coreos.com/v1) is created via `unstructured.Unstructured` to avoid a hard dependency on the prometheus-operator Go types. If the CRD is not installed, `apimeta.IsNoMatchError` is caught and the step is silently skipped — the operator installs and runs fine without Prometheus.
+`ServiceMonitor` (monitoring.coreos.com/v1) is created via `unstructured.Unstructured` to avoid a hard dependency on the prometheus-operator Go types. One endpoint is added per port with `metrics.enabled: true`; optional `metrics.interval` and `metrics.labels` set per-endpoint interval and ServiceMonitor metadata labels respectively. If the CRD is not installed, `apimeta.IsNoMatchError` is caught and the step is silently skipped — the operator installs and runs fine without Prometheus.
 
 ### CEL validation
 

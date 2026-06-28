@@ -17,7 +17,12 @@ spec:
           containerPort: 9090
           servicePort: 9090
           expose: false
-          metricsPath: /metrics
+          metrics:
+            enabled: true
+            path: /metrics
+            interval: "15s"
+            labels:
+              release: prometheus-stack   # must match your Prometheus serviceMonitorSelector
       resources:
         requests:
           cpu: "200m"
@@ -41,7 +46,10 @@ spec:
           containerPort: 9100
           servicePort: 9100
           expose: false
-          metricsPath: /metrics
+          metrics:
+            enabled: true
+            path: /metrics
+            interval: "15s"
       resources:
         requests:
           cpu: "10m"
@@ -72,13 +80,6 @@ spec:
 
   # LoadBalancer provisions a cloud LB and assigns an external IP; use ClusterIP for internal-only
   serviceType: LoadBalancer
-
-  # Creates a ServiceMonitor (monitoring.coreos.com/v1); silently skipped without prometheus-operator
-  monitoringConfig:
-    enabled: true
-    scrapeInterval: "15s"
-    labels:
-      release: prometheus-stack   # must match your Prometheus serviceMonitorSelector
 
   loggingConfig:
     stdout:

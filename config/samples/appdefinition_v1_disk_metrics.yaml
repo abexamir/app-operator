@@ -19,6 +19,8 @@ spec:
           metrics:
             enabled: true
             path: /metrics
+            labels:
+              release: prometheus-stack
       readinessProbe:
         type: httpGet
         httpGet:
@@ -64,7 +66,3 @@ spec:
       - mountPath: /data
         subPath: data
 
-  monitoringConfig:
-    enabled: true
-    labels:
-      release: prometheus-stack

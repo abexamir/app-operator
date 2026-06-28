@@ -1266,8 +1266,35 @@ spec:
                             type: integer
                           expose:
                             type: boolean
-                          metricsPath:
-                            type: string
+                          metrics:
+                            description: |-
+                              MetricsSpec configures Prometheus scraping for a port.
+                              When enabled, the operator adds an endpoint to the app's ServiceMonitor.
+                              Silently skipped if the prometheus-operator CRDs are not installed.
+                            properties:
+                              enabled:
+                                default: false
+                                description: Enabled adds this port as a ServiceMonitor
+                                  scrape endpoint.
+                                type: boolean
+                              interval:
+                                description: Interval is the Prometheus scrape interval
+                                  for this endpoint (e.g. "15s", "30s").
+                                type: string
+                              labels:
+                                additionalProperties:
+                                  type: string
+                                description: 'Labels are merged onto the ServiceMonitor
+                                  metadata (e.g. release: prometheus-stack).'
+                                type: object
+                              path:
+                                default: /metrics
+                                description: Path is the HTTP path Prometheus will
+                                  scrape. Defaults to /metrics.
+                                type: string
+                            required:
+                            - enabled
+                            type: object
                           name:
                             type: string
                           protocol:
@@ -1960,19 +1987,6 @@ spec:
                     - enabled
                     - format
                     type: object
-                type: object
-              monitoringConfig:
-                properties:
-                  enabled:
-                    type: boolean
-                  labels:
-                    additionalProperties:
-                      type: string
-                    type: object
-                  scrapeInterval:
-                    type: string
-                required:
-                - enabled
                 type: object
               nodeSelector:
                 additionalProperties:
@@ -2763,7 +2777,7 @@ spec:
         - --health-probe-bind-address=:8081
         command:
         - /manager
-        image: ghcr.io/abexamir/app-operator:latest
+        image: controller:develop
         livenessProbe:
           httpGet:
             path: /healthz

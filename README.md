@@ -77,7 +77,7 @@ kubectl delete -f https://raw.githubusercontent.com/abexamir/app-operator/main/d
 | `secrets[]` with `data` | `Secret` per entry (operator-owned) |
 | `secrets[]` with `secretRef` | No resource created — existing Secret is referenced |
 | `externalSecrets[]` | `ExternalSecret` per entry (requires External Secrets Operator) |
-| `monitoringConfig.enabled: true` | `ServiceMonitor` (requires prometheus-operator) |
+| `ports[].metrics.enabled: true` | `ServiceMonitor` (requires prometheus-operator) |
 
 All operator-owned child resources are garbage-collected when the `AppDefinition` is deleted.
 
@@ -136,7 +136,12 @@ containers:
         servicePort: 80
         protocol: TCP
         expose: true          # adds this port to the Service
-        metricsPath: /metrics # enables Prometheus scraping on this port
+        metrics:
+          enabled: true       # adds this port as a ServiceMonitor scrape endpoint
+          path: /metrics      # defaults to /metrics
+          interval: "30s"     # optional per-endpoint scrape interval
+          labels:
+            release: prometheus-stack  # merged onto the ServiceMonitor metadata
     readinessProbe:
       type: httpGet           # httpGet | tcpSocket | exec
       httpGet:
@@ -358,7 +363,7 @@ externalSecrets:
       - key: /myapp/config
 ```
 
-The resulting Kubernetes Secret is named `<app>-<name>` and is owned by the `ExternalSecret`. ESO manages its lifecycle; the operator does not delete or modify it directly. If ESO is not installed, this step is silently skipped (same pattern as `monitoringConfig`).
+The resulting Kubernetes Secret is named `<app>-<name>` and is owned by the `ExternalSecret`. ESO manages its lifecycle; the operator does not delete or modify it directly. If ESO is not installed, this step is silently skipped (same pattern as ServiceMonitor).
 
 ### `imagePullSecrets`
 
@@ -367,18 +372,6 @@ References to pre-existing Secrets for pulling private images.
 ```yaml
 imagePullSecrets:
   - name: my-registry-secret
-```
-
-### `monitoringConfig`
-
-When `enabled: true` and at least one port has `metricsPath` set, a `ServiceMonitor` (monitoring.coreos.com/v1) is created. If the prometheus-operator CRDs are not installed, this step is silently skipped.
-
-```yaml
-monitoringConfig:
-  enabled: true
-  scrapeInterval: "30s"
-  labels:
-    release: prometheus-stack   # must match your Prometheus serviceMonitorSelector
 ```
 
 ### `loggingConfig`

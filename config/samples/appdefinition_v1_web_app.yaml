@@ -24,7 +24,6 @@ spec:
           containerPort: 8080
           servicePort: 80
           expose: true
-          metricsPath: /metrics
         - name: grpc
           containerPort: 9090
           servicePort: 9090

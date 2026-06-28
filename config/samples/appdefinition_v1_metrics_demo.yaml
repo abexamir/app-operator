@@ -17,6 +17,8 @@ spec:
           metrics:
             enabled: true
             path: /metrics
+            labels:
+              release: prometheus-stack
       readinessProbe:
         type: httpGet
         httpGet:
@@ -54,9 +56,3 @@ spec:
           memory: "32Mi"
 
   replicas: 1
-
-  # The release label must match your Prometheus serviceMonitorSelector (see platform_ops sample).
-  monitoringConfig:
-    enabled: true
-    labels:
-      release: prometheus-stack

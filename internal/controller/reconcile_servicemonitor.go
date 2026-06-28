@@ -21,21 +21,19 @@ var serviceMonitorGVK = schema.GroupVersionKind{
 	Kind:    "ServiceMonitor",
 }
 
-// reconcileServiceMonitor creates or updates a ServiceMonitor when metrics.enabled is true.
+// reconcileServiceMonitor creates or updates a ServiceMonitor when any port has metrics.enabled.
 // When the prometheus-operator CRDs are not installed the call is silently skipped — the app
 // still works, just without Prometheus scraping.
 func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, appDef *v1.AppDefinition) error {
 	logger := log.FromContext(ctx)
 	smKey := types.NamespacedName{Name: serviceMonitorName(appDef.Name), Namespace: appDef.Namespace}
 
-	enabled := hasMetricsEnabled(appDef) ||
-		(appDef.Spec.MonitoringConfig != nil && appDef.Spec.MonitoringConfig.Enabled)
 	endpoints := buildSMEndpoints(appDef)
 
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(serviceMonitorGVK)
 
-	if !enabled || len(endpoints) == 0 {
+	if len(endpoints) == 0 {
 		err := r.Get(ctx, smKey, existing)
 		if err == nil {
 			logger.Info("deleting ServiceMonitor")
@@ -47,16 +45,6 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 		return err
 	}
 
-	labels := make(map[string]interface{})
-	for k, v := range standardLabels(appDef.Name) {
-		labels[k] = v
-	}
-	if appDef.Spec.MonitoringConfig != nil {
-		for k, v := range appDef.Spec.MonitoringConfig.Labels {
-			labels[k] = v
-		}
-	}
-
 	desired := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "monitoring.coreos.com/v1",
@@ -64,7 +52,7 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 			"metadata": map[string]interface{}{
 				"name":      serviceMonitorName(appDef.Name),
 				"namespace": appDef.Namespace,
-				"labels":    labels,
+				"labels":    buildSMLabels(appDef),
 			},
 			"spec": map[string]interface{}{
 				"selector": map[string]interface{}{
@@ -109,57 +97,43 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 	return r.Update(ctx, desired)
 }
 
-func hasMetricsEnabled(appDef *v1.AppDefinition) bool {
+func buildSMLabels(appDef *v1.AppDefinition) map[string]interface{} {
+	labels := make(map[string]interface{})
+	for k, v := range standardLabels(appDef.Name) {
+		labels[k] = v
+	}
 	for _, c := range appDef.Spec.Containers {
 		for _, p := range c.Ports {
-			if p.Metrics != nil && p.Metrics.Enabled {
-				return true
+			if p.Metrics == nil || !p.Metrics.Enabled {
+				continue
+			}
+			for k, v := range p.Metrics.Labels {
+				labels[k] = v
 			}
 		}
 	}
-	return false
+	return labels
 }
 
 func buildSMEndpoints(appDef *v1.AppDefinition) []interface{} {
-	if hasMetricsEnabled(appDef) {
-		var endpoints []interface{}
-		seen := map[string]bool{}
-		for _, c := range appDef.Spec.Containers {
-			for _, p := range c.Ports {
-				if p.Metrics == nil || !p.Metrics.Enabled || seen[p.Name] {
-					continue
-				}
-				seen[p.Name] = true
-				path := p.Metrics.Path
-				if path == "" {
-					path = "/metrics"
-				}
-				endpoints = append(endpoints, map[string]interface{}{
-					"port": p.Name,
-					"path": path,
-				})
-			}
-		}
-		return endpoints
-	}
-
-	if appDef.Spec.MonitoringConfig == nil || !appDef.Spec.MonitoringConfig.Enabled {
-		return nil
-	}
 	var endpoints []interface{}
 	seen := map[string]bool{}
 	for _, c := range appDef.Spec.Containers {
 		for _, p := range c.Ports {
-			if p.MetricsPath == "" || seen[p.Name] {
+			if p.Metrics == nil || !p.Metrics.Enabled || seen[p.Name] {
 				continue
 			}
 			seen[p.Name] = true
+			path := p.Metrics.Path
+			if path == "" {
+				path = "/metrics"
+			}
 			ep := map[string]interface{}{
 				"port": p.Name,
-				"path": p.MetricsPath,
+				"path": path,
 			}
-			if appDef.Spec.MonitoringConfig.ScrapeInterval != "" {
-				ep["interval"] = appDef.Spec.MonitoringConfig.ScrapeInterval
+			if p.Metrics.Interval != "" {
+				ep["interval"] = p.Metrics.Interval
 			}
 			endpoints = append(endpoints, ep)
 		}
