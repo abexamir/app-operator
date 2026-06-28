@@ -186,7 +186,7 @@ replicas: 3   # defaults to 1
 
 Ignored when `autoscaling.enabled: true` — the HPA controls the replica count.
 
-Apps with `disk` are limited to `replicas: 1`. The PVC uses `ReadWriteOnce`; multiple pods sharing it simultaneously corrupt the data. This is enforced at the API level.
+Apps with `disk` are limited to `replicas: 1`. The PVC uses `ReadWriteOnce`; multiple pods sharing it simultaneously corrupt the data. This is enforced at the API level. Stateful apps also use a `Recreate` deployment strategy so only one pod mounts the volume during updates.
 
 ### `autoscaling`
 

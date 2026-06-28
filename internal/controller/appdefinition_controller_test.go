@@ -78,6 +78,14 @@ var _ = Describe("AppDefinition Controller", func() {
 			}
 		})
 
+		newTestReconciler := func() *AppDefinitionReconciler {
+			return &AppDefinitionReconciler{
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				APIReader: k8sClient,
+			}
+		}
+
 		// reconcileTwice runs two reconcile passes: the first adds the finalizer,
 		// the second performs the actual resource reconciliation.
 		reconcileTwice := func(r *AppDefinitionReconciler, nn types.NamespacedName) {
@@ -88,22 +96,54 @@ var _ = Describe("AppDefinition Controller", func() {
 		}
 
 		It("should reconcile without error", func() {
-			r := &AppDefinitionReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			r := newTestReconciler()
 			reconcileTwice(r, namespacedName)
 		})
 
 		It("should create a Deployment", func() {
-			r := &AppDefinitionReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			r := newTestReconciler()
 			reconcileTwice(r, namespacedName)
 
 			deployment := &appsv1.Deployment{}
 			Expect(k8sClient.Get(ctx, namespacedName, deployment)).To(Succeed())
 			Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
 			Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal("nginx:latest"))
+			Expect(deployment.Spec.Strategy.Type).To(Equal(appsv1.RollingUpdateDeploymentStrategyType))
+		})
+
+		It("should use Recreate strategy for stateful apps with disk", func() {
+			statefulName := types.NamespacedName{Name: "stateful-test", Namespace: namespace}
+			stateful := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: statefulName.Name, Namespace: namespace},
+				Spec: appdefinitionv1.AppDefinitionSpec{
+					Containers: []appdefinitionv1.ContainerSpec{
+						{
+							Name:  "db",
+							Image: "postgres:16",
+							Ports: []appdefinitionv1.PortSpec{
+								{Name: "postgres", ContainerPort: 5432, ServicePort: 5432, Expose: true},
+							},
+						},
+					},
+					Disk: &appdefinitionv1.DiskConfig{
+						SizeInGi:         1,
+						StorageClassName: "standard",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, stateful)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, stateful) })
+
+			r := newTestReconciler()
+			reconcileTwice(r, statefulName)
+
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, statefulName, deployment)).To(Succeed())
+			Expect(deployment.Spec.Strategy.Type).To(Equal(appsv1.RecreateDeploymentStrategyType))
 		})
 
 		It("should create a Service with exposed ports", func() {
-			r := &AppDefinitionReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			r := newTestReconciler()
 			reconcileTwice(r, namespacedName)
 
 			service := &corev1.Service{}
@@ -114,7 +154,7 @@ var _ = Describe("AppDefinition Controller", func() {
 		})
 
 		It("should set owner references on child resources", func() {
-			r := &AppDefinitionReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			r := newTestReconciler()
 			reconcileTwice(r, namespacedName)
 
 			deployment := &appsv1.Deployment{}
@@ -124,7 +164,7 @@ var _ = Describe("AppDefinition Controller", func() {
 		})
 
 		It("should add a finalizer on the first reconcile", func() {
-			r := &AppDefinitionReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			r := newTestReconciler()
 			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})
 			Expect(err).NotTo(HaveOccurred())
 
@@ -144,7 +184,7 @@ var _ = Describe("AppDefinition Controller", func() {
 			Expect(k8sClient.Create(ctx, paused)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, paused) })
 
-			r := &AppDefinitionReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			r := newTestReconciler()
 			// Two reconcile calls: first adds finalizer, second hits Paused guard.
 			reconcileTwice(r, pausedName)
 

@@ -40,6 +40,7 @@ func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDe
 
 			deployment.Labels = standardLabels(appDef.Name)
 			deployment.Spec.Replicas = &replicas
+			deployment.Spec.Strategy = deploymentStrategy(appDef)
 			// Selector is immutable after creation; only set it on new deployments.
 			if deployment.Spec.Selector == nil {
 				deployment.Spec.Selector = &metav1.LabelSelector{
@@ -75,6 +76,13 @@ func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDe
 		logger.Info("Deployment reconciled", "operation", op)
 	}
 	return nil
+}
+
+func deploymentStrategy(appDef *v1.AppDefinition) appsv1.DeploymentStrategy {
+	if isStateful(appDef) {
+		return appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
+	}
+	return appsv1.DeploymentStrategy{Type: appsv1.RollingUpdateDeploymentStrategyType}
 }
 
 // podTemplateAnnotations returns annotations for the pod template.

@@ -166,6 +166,10 @@ This works with any source that creates Kubernetes Secrets: External Secrets Ope
 | `IngressReady` | `spec.domains` is non-empty | Ingress has at least one LoadBalancer address assigned |
 | `HPAActive` | `spec.autoscaling.enabled: true` | HPA resource exists |
 
+### Deployment strategy
+
+Apps with `spec.disk` are stateful. Their Deployment uses `strategy: Recreate` so the old pod terminates before the new one starts — required for `ReadWriteOnce` volumes that cannot be mounted by two pods at once. Stateless apps use `strategy: RollingUpdate`.
+
 ### ServiceMonitor
 
 `ServiceMonitor` (monitoring.coreos.com/v1) is created via `unstructured.Unstructured` to avoid a hard dependency on the prometheus-operator Go types. One endpoint is added per port with `metrics.enabled: true`; optional `metrics.interval` and `metrics.labels` set per-endpoint interval and ServiceMonitor metadata labels respectively. If the CRD is not installed, `apimeta.IsNoMatchError` is caught and the step is silently skipped — the operator installs and runs fine without Prometheus.

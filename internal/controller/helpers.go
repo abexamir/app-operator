@@ -25,6 +25,10 @@ func pvcName(appName string) string {
 	return appName + "-disk"
 }
 
+func isStateful(appDef *v1.AppDefinition) bool {
+	return appDef.Spec.Disk != nil
+}
+
 // serviceMonitorName avoids naming the ServiceMonitor after the app workload;
 // some clusters prune ServiceMonitors that share the app's exact name.
 func serviceMonitorName(appName string) string {
