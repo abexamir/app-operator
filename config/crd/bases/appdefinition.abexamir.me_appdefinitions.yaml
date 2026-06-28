@@ -30,6 +30,10 @@ spec:
     name: v1
     schema:
       openAPIV3Schema:
+        description: |-
+          AppDefinition deploys a complete application from one resource: Deployment, Service,
+          and optional Ingress, PVC, HPA, ConfigMaps, Secrets, ExternalSecrets, and ServiceMonitor.
+          Child resources are owned and garbage-collected on deletion.
         properties:
           apiVersion:
             description: |-
@@ -49,9 +53,11 @@ spec:
           metadata:
             type: object
           spec:
+            description: Spec defines the desired application configuration.
             properties:
               affinity:
-                description: Affinity is a group of affinity scheduling rules.
+                description: Affinity sets pod affinity, anti-affinity, and node affinity
+                  rules.
                 properties:
                   nodeAffinity:
                     description: Describes node affinity scheduling rules for the
@@ -963,21 +969,30 @@ spec:
                     type: object
                 type: object
               autoscaling:
-                description: Autoscaling configures an HPA. When enabled, the replicas
-                  field sets minReplicas.
+                description: Autoscaling configures an HPA for the Deployment.
                 properties:
                   enabled:
+                    description: Enabled creates or updates an HPA when true. Deletes
+                      the HPA when false.
                     type: boolean
                   maxReplicas:
+                    description: MaxReplicas is the HPA ceiling.
                     format: int32
+                    minimum: 1
                     type: integer
                   minReplicas:
+                    description: MinReplicas is the HPA floor. Defaults to spec.replicas
+                      or 1 when unset.
                     format: int32
                     type: integer
                   targetCPUUtilizationPercentage:
+                    description: TargetCPUUtilizationPercentage scales on average
+                      CPU utilization across pods.
                     format: int32
                     type: integer
                   targetMemoryUtilizationPercentage:
+                    description: TargetMemoryUtilizationPercentage scales on average
+                      memory utilization across pods.
                     format: int32
                     type: integer
                 required:
@@ -985,22 +1000,25 @@ spec:
                 - maxReplicas
                 type: object
               configMaps:
-                description: |-
-                  ConfigMaps defines inline ConfigMaps created and managed by the operator.
-                  Each entry's data is mounted at MountPath in all containers.
+                description: ConfigMaps creates operator-owned ConfigMaps mounted
+                  in all containers.
                 items:
                   description: |-
-                    ConfigMapMount defines a ConfigMap whose content is embedded directly in the AppDefinition.
-                    The operator creates and owns a ConfigMap named "<appname>-<name>" and mounts it at MountPath
-                    in every container.
+                    ConfigMapMount embeds a ConfigMap in the AppDefinition. The operator creates and
+                    owns "<app>-<name>" and mounts it at MountPath in every container.
                   properties:
                     data:
                       additionalProperties:
                         type: string
+                      description: Data is the ConfigMap key-value content.
                       type: object
                     mountPath:
+                      description: MountPath is the directory where ConfigMap keys
+                        appear as files in all containers.
                       type: string
                     name:
+                      description: Name identifies this entry. The ConfigMap is named
+                        "<app>-<name>".
                       type: string
                   required:
                   - data
@@ -1009,18 +1027,24 @@ spec:
                   type: object
                 type: array
               containers:
-                description: Containers defines the application containers to run.
+                description: Containers are the main application containers. At least
+                  one is required.
                 items:
+                  description: ContainerSpec defines a main application container
+                    in the pod.
                   properties:
                     args:
+                      description: Args overrides the image CMD.
                       items:
                         type: string
                       type: array
                     command:
+                      description: Command overrides the image ENTRYPOINT.
                       items:
                         type: string
                       type: array
                     env:
+                      description: Env sets container environment variables.
                       items:
                         description: EnvVar represents an environment variable present
                           in a Container.
@@ -1140,11 +1164,15 @@ spec:
                         type: object
                       type: array
                     image:
+                      description: Image is the OCI image reference (registry/repo:tag
+                        or digest).
                       type: string
                     livenessProbe:
+                      description: LivenessProbe restarts the container when it fails.
                       properties:
                         exec:
-                          description: ExecAction describes a "run in container" action.
+                          description: Exec runs a command inside the container. Use
+                            when type is exec.
                           properties:
                             command:
                               description: |-
@@ -1159,11 +1187,13 @@ spec:
                               x-kubernetes-list-type: atomic
                           type: object
                         failureThreshold:
+                          description: FailureThreshold is the number of consecutive
+                            failures before marking unhealthy.
                           format: int32
                           type: integer
                         httpGet:
-                          description: HTTPGetAction describes an action based on
-                            HTTP Get requests.
+                          description: HTTPGet probes an HTTP endpoint. Use when type
+                            is httpGet.
                           properties:
                             host:
                               description: |-
@@ -1212,17 +1242,23 @@ spec:
                           - port
                           type: object
                         initialDelaySeconds:
+                          description: InitialDelaySeconds waits before the first
+                            probe after container start.
                           format: int32
                           type: integer
                         periodSeconds:
+                          description: PeriodSeconds is the interval between probe
+                            attempts.
                           format: int32
                           type: integer
                         successThreshold:
+                          description: SuccessThreshold is the number of consecutive
+                            successes before marking healthy.
                           format: int32
                           type: integer
                         tcpSocket:
-                          description: TCPSocketAction describes an action based on
-                            opening a socket
+                          description: TCPSocket probes a TCP port. Use when type
+                            is tcpSocket.
                           properties:
                             host:
                               description: 'Optional: Host name to connect to, defaults
@@ -1241,28 +1277,44 @@ spec:
                           - port
                           type: object
                         timeoutSeconds:
+                          description: TimeoutSeconds is the per-probe timeout.
                           format: int32
                           type: integer
                         type:
+                          description: 'Type selects the probe mechanism: httpGet,
+                            tcpSocket, or exec.'
+                          enum:
+                          - httpGet
+                          - tcpSocket
+                          - exec
                           type: string
                       required:
                       - type
                       type: object
                     name:
+                      description: Name is the container name within the pod. Must
+                        be unique among all containers.
                       type: string
                     ports:
+                      description: Ports declares container ports, Service exposure,
+                        and metrics scraping.
                       items:
+                        description: PortSpec declares a container port and how it
+                          is exposed to the cluster.
                         properties:
                           containerPort:
+                            description: ContainerPort is the port the process listens
+                              on inside the container.
                             format: int32
                             type: integer
                           expose:
+                            description: |-
+                              Expose adds this port to the Service when true. Ports with metrics only
+                              (expose: false) can still be scraped via the Service's named port.
                             type: boolean
                           metrics:
-                            description: |-
-                              MetricsSpec configures Prometheus scraping for a port.
-                              When enabled, the operator adds an endpoint to the app's ServiceMonitor.
-                              Silently skipped if the prometheus-operator CRDs are not installed.
+                            description: Metrics configures Prometheus scraping for
+                              this port via a ServiceMonitor.
                             properties:
                               enabled:
                                 default: false
@@ -1270,28 +1322,40 @@ spec:
                                   scrape endpoint.
                                 type: boolean
                               interval:
-                                description: Interval is the Prometheus scrape interval
-                                  for this endpoint (e.g. "15s", "30s").
+                                description: Interval is the per-endpoint scrape interval
+                                  (e.g. "15s", "30s").
                                 type: string
                               labels:
                                 additionalProperties:
                                   type: string
-                                description: 'Labels are merged onto the ServiceMonitor
-                                  metadata (e.g. release: prometheus-stack).'
+                                description: |-
+                                  Labels are merged onto ServiceMonitor metadata (e.g. release: prometheus-stack
+                                  to match a Prometheus serviceMonitorSelector).
                                 type: object
                               path:
                                 default: /metrics
-                                description: Path is the HTTP path Prometheus will
-                                  scrape. Defaults to /metrics.
+                                description: Path is the HTTP path Prometheus scrapes.
+                                  Defaults to /metrics.
                                 type: string
                             required:
                             - enabled
                             type: object
                           name:
+                            description: |-
+                              Name is the port identifier used in the Service, Ingress, and ServiceMonitor.
+                              Must be unique across all containers in the AppDefinition.
                             type: string
                           protocol:
+                            default: TCP
+                            description: Protocol is the network protocol. Defaults
+                              to TCP.
+                            enum:
+                            - TCP
+                            - UDP
                             type: string
                           servicePort:
+                            description: ServicePort is the port number published
+                              on the Kubernetes Service.
                             format: int32
                             type: integer
                         required:
@@ -1301,9 +1365,12 @@ spec:
                         type: object
                       type: array
                     readinessProbe:
+                      description: ReadinessProbe gates Service endpoints and load
+                        balancer traffic.
                       properties:
                         exec:
-                          description: ExecAction describes a "run in container" action.
+                          description: Exec runs a command inside the container. Use
+                            when type is exec.
                           properties:
                             command:
                               description: |-
@@ -1318,11 +1385,13 @@ spec:
                               x-kubernetes-list-type: atomic
                           type: object
                         failureThreshold:
+                          description: FailureThreshold is the number of consecutive
+                            failures before marking unhealthy.
                           format: int32
                           type: integer
                         httpGet:
-                          description: HTTPGetAction describes an action based on
-                            HTTP Get requests.
+                          description: HTTPGet probes an HTTP endpoint. Use when type
+                            is httpGet.
                           properties:
                             host:
                               description: |-
@@ -1371,17 +1440,23 @@ spec:
                           - port
                           type: object
                         initialDelaySeconds:
+                          description: InitialDelaySeconds waits before the first
+                            probe after container start.
                           format: int32
                           type: integer
                         periodSeconds:
+                          description: PeriodSeconds is the interval between probe
+                            attempts.
                           format: int32
                           type: integer
                         successThreshold:
+                          description: SuccessThreshold is the number of consecutive
+                            successes before marking healthy.
                           format: int32
                           type: integer
                         tcpSocket:
-                          description: TCPSocketAction describes an action based on
-                            opening a socket
+                          description: TCPSocket probes a TCP port. Use when type
+                            is tcpSocket.
                           properties:
                             host:
                               description: 'Optional: Host name to connect to, defaults
@@ -1400,16 +1475,22 @@ spec:
                           - port
                           type: object
                         timeoutSeconds:
+                          description: TimeoutSeconds is the per-probe timeout.
                           format: int32
                           type: integer
                         type:
+                          description: 'Type selects the probe mechanism: httpGet,
+                            tcpSocket, or exec.'
+                          enum:
+                          - httpGet
+                          - tcpSocket
+                          - exec
                           type: string
                       required:
                       - type
                       type: object
                     resources:
-                      description: ResourceRequirements describes the compute resource
-                        requirements.
+                      description: Resources sets CPU and memory requests and limits.
                       properties:
                         claims:
                           description: |-
@@ -1471,22 +1552,35 @@ spec:
                   - image
                   - name
                   type: object
+                minItems: 1
                 type: array
               disk:
+                description: |-
+                  Disk provisions a persistent volume. Makes the app stateful (Recreate strategy,
+                  max one replica, no autoscaling).
                 properties:
                   annotations:
                     additionalProperties:
                       type: string
                     description: |-
-                      Annotations are added verbatim to the PVC metadata. Useful for storage-class-specific
-                      hints, backup policies, or custom tooling that selects PVCs by annotation.
+                      Annotations are merged into PVC metadata on every reconcile. Provisioner-owned
+                      annotations (e.g. pv.kubernetes.io/bind-completed) are never removed.
                     type: object
                   partitions:
+                    description: |-
+                      Partitions mount subdirectories of the PVC at different paths. When empty,
+                      the entire volume is mounted at /data in every container.
                     items:
+                      description: DiskPartition mounts a subdirectory of the app
+                        PVC into a container path.
                       properties:
                         mountPath:
+                          description: MountPath is the absolute path inside every
+                            container where SubPath is mounted.
                           type: string
                         subPath:
+                          description: SubPath is the directory within the PVC volume
+                            to mount.
                           type: string
                       required:
                       - mountPath
@@ -1495,44 +1589,63 @@ spec:
                     type: array
                   protect:
                     description: |-
-                      Protect skips PVC creation and modification when true. Use during PVC migrations
-                      or manual PV rebinding to prevent the operator from racing to recreate a deleted PVC.
-                      The rest of the AppDefinition (Deployment, Ingress, etc.) continues reconciling normally.
+                      Protect blocks PVC creation when the PVC is absent, preventing the operator
+                      from racing during manual migrations or PV rebinds. Annotation updates and
+                      size expansion still apply to an existing PVC.
                     type: boolean
                   setFsGroup:
+                    description: |-
+                      SetFsGroup injects fsGroup into the pod securityContext for group write access
+                      to the volume. Prefer spec.securityContext.fsGroup for an explicit GID.
                     type: boolean
                   sizeInGi:
+                    description: SizeInGi is the requested PVC capacity in gibibytes.
+                    minimum: 1
                     type: integer
                   storageClassName:
+                    description: StorageClassName is the StorageClass used to provision
+                      the PVC.
                     type: string
                 required:
                 - sizeInGi
                 - storageClassName
                 type: object
               domains:
+                description: Domains creates an Ingress with one rule per entry.
                 items:
+                  description: DomainSpec declares an Ingress host rule and optional
+                    TLS.
                   properties:
                     annotations:
                       additionalProperties:
                         type: string
+                      description: Annotations are merged into the Ingress rule metadata.
                       type: object
                     certIssuer:
+                      description: CertIssuer is the cert-manager ClusterIssuer or
+                        Issuer name for automatic TLS.
                       type: string
                     name:
+                      description: Name is the DNS hostname (e.g. app.example.com).
                       type: string
                     path:
+                      description: Path is the URL path prefix routed to the backend.
+                        Defaults to /.
                       type: string
                     portName:
-                      description: PortName is the service port name to route traffic
-                        to. Defaults to "http".
+                      description: PortName is the Service port name to route to.
+                        Defaults to http.
                       type: string
                     redirect_tls:
+                      description: RedirectTLS redirects HTTP to HTTPS when true and
+                        TLS is enabled.
                       type: boolean
                     secretName:
-                      description: SecretName is the TLS secret name. Auto-generated
-                        as <app>-<domain>-tls if not set.
+                      description: SecretName is the TLS secret for this host. Defaults
+                        to <app>-<domain>-tls.
                       type: string
                     tls:
+                      description: TLS enables HTTPS for this host using a TLS secret.
                       type: boolean
                   required:
                   - name
@@ -1540,53 +1653,46 @@ spec:
                   type: object
                 type: array
               externalSecrets:
-                description: |-
-                  ExternalSecrets creates ExternalSecret resources (external-secrets.io/v1beta1) that ESO
-                  syncs from a SecretStore or ClusterSecretStore into Kubernetes Secrets. The operator then
-                  mounts or injects those Secrets identically to inline secrets — without storing any values
-                  in the AppDefinition manifest. Silently skipped if the ESO CRDs are not installed.
+                description: ExternalSecrets creates ExternalSecret resources synced
+                  by ESO.
                 items:
                   description: |-
-                    ExternalSecretMount creates an ExternalSecret (external-secrets.io/v1beta1) that ESO
-                    syncs into a Kubernetes Secret named "<app>-<name>". The resulting Secret is then
-                    mounted or injected exactly like an inline secret — but its values never appear in
-                    the AppDefinition manifest.
-
-                    At least one of Data or DataFrom must be set.
+                    ExternalSecretMount creates an ExternalSecret (external-secrets.io/v1) that ESO
+                    syncs into a Kubernetes Secret named "<app>-<name>". Values never appear in the
+                    AppDefinition manifest. Silently skipped if ESO CRDs are not installed.
                   properties:
                     asEnvVars:
-                      description: AsEnvVars injects all keys of the resulting Secret
-                        as environment variables into all containers.
+                      description: AsEnvVars injects all synced Secret keys as environment
+                        variables in all containers.
                       type: boolean
                     data:
-                      description: Data maps individual remote keys to keys in the
-                        resulting Secret.
+                      description: Data maps individual remote keys to Secret keys.
                       items:
                         description: ExternalSecretData maps one remote key to one
                           key in the resulting Kubernetes Secret.
                         properties:
                           remoteRef:
-                            description: RemoteRef points to the value in the external
+                            description: RemoteRef locates the value in the external
                               store.
                             properties:
                               key:
-                                description: Key is the path or name of the secret
-                                  in the store (e.g. "secret/data/myapp/db").
+                                description: Key is the secret path in the store (e.g.
+                                  "secret/data/myapp/db").
                                 type: string
                               property:
                                 description: Property is an optional sub-key within
-                                  the secret (e.g. "password" for a KV map).
+                                  a KV secret (e.g. "password").
                                 type: string
                               version:
-                                description: Version pins to a specific version of
-                                  the secret. Omit for the latest.
+                                description: Version pins a specific secret version.
+                                  Omit for latest.
                                 type: string
                             required:
                             - key
                             type: object
                           secretKey:
-                            description: SecretKey is the key that will appear in
-                              the resulting Kubernetes Secret.
+                            description: SecretKey is the key written in the Kubernetes
+                              Secret.
                             type: string
                         required:
                         - remoteRef
@@ -1594,45 +1700,44 @@ spec:
                         type: object
                       type: array
                     dataFrom:
-                      description: DataFrom bulk-imports all keys from a remote path
-                        into the resulting Secret.
+                      description: DataFrom bulk-imports all keys from remote paths.
                       items:
                         description: ExternalSecretDataFrom bulk-imports all keys
-                          from a single path in the store.
+                          from one store path into the Secret.
                         properties:
                           key:
                             description: Key is the store path whose contents are
-                              extracted wholesale into the Secret.
+                              extracted into the Secret.
                             type: string
                           version:
-                            description: Version pins to a specific version. Omit
-                              for the latest.
+                            description: Version pins a specific secret version. Omit
+                              for latest.
                             type: string
                         required:
                         - key
                         type: object
                       type: array
                     mountPath:
-                      description: MountPath mounts the resulting Secret as a directory
-                        of files into all containers.
+                      description: MountPath mounts the synced Secret as files in
+                        all containers.
                       type: string
                     name:
                       description: Name identifies this entry. The ExternalSecret
-                        and resulting Secret are named "<app>-<name>".
+                        and Secret are named "<app>-<name>".
                       type: string
                     refreshInterval:
                       default: 1h
-                      description: RefreshInterval controls how often ESO re-reads
-                        the external store. Defaults to "1h".
+                      description: RefreshInterval is how often ESO re-reads the store.
+                        Defaults to 1h.
                       type: string
                     store:
-                      description: Store is the name of the SecretStore or ClusterSecretStore
-                        to read from.
+                      description: Store is the SecretStore or ClusterSecretStore
+                        name to read from.
                       type: string
                     storeKind:
                       default: ClusterSecretStore
-                      description: StoreKind is "SecretStore" or "ClusterSecretStore".
-                        Defaults to "ClusterSecretStore".
+                      description: StoreKind is SecretStore or ClusterSecretStore.
+                        Defaults to ClusterSecretStore.
                       enum:
                       - SecretStore
                       - ClusterSecretStore
@@ -1646,8 +1751,8 @@ spec:
                     rule: size(self.data) > 0 || size(self.dataFrom) > 0
                 type: array
               imagePullSecrets:
-                description: ImagePullSecrets are references to secrets in the same
-                  namespace for pulling container images.
+                description: ImagePullSecrets references Secrets used to pull private
+                  images.
                 items:
                   description: |-
                     LocalObjectReference contains enough information to let you locate the
@@ -1668,29 +1773,33 @@ spec:
               ingressAnnotations:
                 additionalProperties:
                   type: string
+                description: IngressAnnotations are merged into the Ingress metadata.
                 type: object
               ingressClass:
+                description: IngressClass is the IngressClass name for all domain
+                  rules.
                 type: string
               initContainers:
-                description: |-
-                  InitContainers run to completion before the main containers start.
-                  Useful for migrations, permission setup, or config rendering.
+                description: InitContainers run to completion before main containers
+                  start.
                 items:
                   description: |-
-                    InitContainerSpec defines a container that runs to completion before any main
-                    containers start. Init containers share the same volumes, ConfigMaps, Secrets,
-                    and disk mounts as the main containers but do not expose ports and do not
-                    receive lifecycle hooks.
+                    InitContainerSpec defines a container that runs to completion before main containers start.
+                    Init containers share volumes, ConfigMaps, Secrets, and disk mounts with main containers
+                    but do not expose ports or receive lifecycle hooks.
                   properties:
                     args:
+                      description: Args overrides the image CMD.
                       items:
                         type: string
                       type: array
                     command:
+                      description: Command overrides the image ENTRYPOINT.
                       items:
                         type: string
                       type: array
                     env:
+                      description: Env sets init container environment variables.
                       items:
                         description: EnvVar represents an environment variable present
                           in a Container.
@@ -1810,12 +1919,14 @@ spec:
                         type: object
                       type: array
                     image:
+                      description: Image is the OCI image reference.
                       type: string
                     name:
+                      description: Name is the init container name. Must be unique
+                        among all containers.
                       type: string
                     resources:
-                      description: ResourceRequirements describes the compute resource
-                        requirements.
+                      description: Resources sets CPU and memory requests and limits.
                       properties:
                         claims:
                           description: |-
@@ -1879,11 +1990,14 @@ spec:
                   type: object
                 type: array
               lifecycle:
+                description: Lifecycle sets postStart/preStop hooks on the first container.
                 properties:
                   postStart:
+                    description: PostStart runs immediately after the first container
+                      starts.
                     properties:
                       exec:
-                        description: ExecAction describes a "run in container" action.
+                        description: Exec runs a command in the container filesystem.
                         properties:
                           command:
                             description: |-
@@ -1899,9 +2013,11 @@ spec:
                         type: object
                     type: object
                   preStop:
+                    description: PreStop runs before SIGTERM, useful for connection
+                      draining.
                     properties:
                       exec:
-                        description: ExecAction describes a "run in container" action.
+                        description: Exec runs a command in the container filesystem.
                         properties:
                           command:
                             description: |-
@@ -1918,41 +2034,29 @@ spec:
                     type: object
                 type: object
               loggingConfig:
-                description: "LoggingConfig declares intent for log collection. It
-                  is parsed and stored but\nthe operator does not act on it yet —
-                  log shipping is handled at the cluster\ninfrastructure layer, outside
-                  the operator's reconcile loop.\n\n# Implementation paths to consider\n\nOption
-                  A — Loki + Promtail (simplest, already Prometheus-compatible)\n\n\tPromtail
-                  runs as a DaemonSet and tails /var/log/pods/ on each node.\n\tIt
-                  auto-discovers all pods via the Kubernetes API; no CRD is needed.\n\tOpt-in
-                  scraping can be enforced by having the operator inject a pod\n\tannotation
-                  (e.g. promtail.io/scrape: \"true\") only when loggingConfig\n\tis
-                  present, so Promtail's relabel rules can filter on it.\n\tLogs land
-                  in Loki and are queryable with LogQL alongside Prometheus metrics.\n\nOption
-                  B — OpenTelemetry Operator + PodLogs CRD (closest to ServiceMonitor)\n\n\tThe
-                  OTel Operator introduces a PodLogs CRD. The operator can create
-                  a\n\tPodLogs object (via unstructured, same pattern as ServiceMonitor)
-                  that\n\ttargets pods by label selector. The OTel Collector pipeline
-                  ships logs\n\tto any backend (Loki, Elasticsearch, S3, etc.).\n\tGives
-                  explicit, per-app opt-in control — identical model to ServiceMonitor.\n\nOption
-                  C — Fluent Bit / Vector DaemonSet with annotation-based filtering\n\n\tSimilar
-                  to Option A but using Fluent Bit (lightweight C) or Vector\n\t(Rust,
-                  rich transform DSL). The operator injects annotations that the\n\tDaemonSet's
-                  config uses to include/exclude pods and apply parsing rules.\n\tGood
-                  if the team already operates one of these shippers.\n\nThe loggingConfig
-                  fields (stdout/stderr format, file paths, multiline patterns)\nmap
-                  naturally onto Promtail pipeline_stages or OTel transform processors
-                  and\ncan be translated by the operator once an implementation path
-                  is chosen."
+                description: LoggingConfig declares log shipping intent (not yet enforced
+                  by the operator).
                 properties:
                   files:
+                    description: Files lists container log file paths and parsing
+                      hints.
                     items:
+                      description: LoggingFile describes a log file path and parsing
+                        hints for future log shipping.
                       properties:
                         format:
+                          description: 'Format is the log encoding: json or text.'
+                          enum:
+                          - json
+                          - text
                           type: string
                         multilinePattern:
+                          description: MultilinePattern is a regex matching the first
+                            line of each multiline log entry.
                           type: string
                         path:
+                          description: Path is the absolute path to the log file inside
+                            the container.
                           type: string
                       required:
                       - format
@@ -1960,20 +2064,36 @@ spec:
                       type: object
                     type: array
                   stderr:
+                    description: Stderr configures collection of the container's standard
+                      error stream.
                     properties:
                       enabled:
+                        description: Enabled marks this stream for future log shipping
+                          integration.
                         type: boolean
                       format:
+                        description: 'Format is the log encoding: json or text.'
+                        enum:
+                        - json
+                        - text
                         type: string
                     required:
                     - enabled
                     - format
                     type: object
                   stdout:
+                    description: Stdout configures collection of the container's standard
+                      output stream.
                     properties:
                       enabled:
+                        description: Enabled marks this stream for future log shipping
+                          integration.
                         type: boolean
                       format:
+                        description: 'Format is the log encoding: json or text.'
+                        enum:
+                        - json
+                        - text
                         type: string
                     required:
                     - enabled
@@ -1983,49 +2103,47 @@ spec:
               nodeSelector:
                 additionalProperties:
                   type: string
+                description: NodeSelector constrains pods to nodes with matching labels.
                 type: object
               paused:
-                description: Paused suspends reconciliation when true. Existing resources
-                  are left unchanged.
+                description: Paused suspends reconciliation. Existing resources are
+                  left unchanged.
                 type: boolean
               replicas:
+                description: Replicas is the desired pod count. Defaults to 1. Capped
+                  at 1 when disk is set.
                 format: int32
                 type: integer
               secrets:
-                description: |-
-                  Secrets defines inline or externally-referenced Secrets.
-                  Use MountPath to mount as files and/or AsEnvVars to inject as environment variables.
+                description: Secrets creates inline or references pre-existing Secrets.
                 items:
                   description: |-
-                    SecretMount defines a Secret used by the application.
-                    Use Data to embed secret values directly (the operator creates and owns the Secret).
-                    Use SecretRef to reference a pre-existing Secret in the same namespace (operator does not manage it).
-                    Data and SecretRef are mutually exclusive.
-                    Set MountPath to mount the secret as a directory of files into all containers.
-                    Set AsEnvVars to inject every key as an environment variable into all containers.
-                    Both MountPath and AsEnvVars may be used at the same time.
+                    SecretMount defines an inline or pre-existing Secret for the application.
+                    Data and SecretRef are mutually exclusive. MountPath and AsEnvVars may both be set.
                   properties:
                     asEnvVars:
-                      description: AsEnvVars injects all secret keys as environment
-                        variables into all containers.
+                      description: AsEnvVars injects all Secret keys as environment
+                        variables in all containers.
                       type: boolean
                     data:
                       additionalProperties:
                         type: string
                       description: |-
-                        Data defines inline secret values. The operator creates a Secret named "<app>-<name>".
+                        Data embeds secret values. The operator creates and owns the Secret.
                         Mutually exclusive with SecretRef.
                       type: object
                     mountPath:
-                      description: MountPath mounts the secret as a directory of files
-                        into all containers. Optional.
+                      description: MountPath mounts the Secret as files in all containers.
                       type: string
                     name:
+                      description: Name identifies this entry. Inline secrets are
+                        named "<app>-<name>".
                       type: string
                     secretRef:
                       description: |-
-                        SecretRef names a pre-existing Secret in the same namespace. The operator mounts or
-                        injects it but does not create, update, or delete it. Mutually exclusive with Data.
+                        SecretRef references a pre-existing Secret in the same namespace.
+                        The operator mounts or injects it but does not manage its lifecycle.
+                        Mutually exclusive with Data.
                       type: string
                   required:
                   - name
@@ -2035,10 +2153,8 @@ spec:
                     rule: '!(has(self.secretRef) && size(self.secretRef) > 0 && has(self.data))'
                 type: array
               securityContext:
-                description: |-
-                  PodSecurityContext holds pod-level security attributes and common container settings.
-                  Some fields are also present in container.securityContext.  Field values of
-                  container.securityContext take precedence over field values of PodSecurityContext.
+                description: SecurityContext is the pod-level security context applied
+                  to every container.
                 properties:
                   appArmorProfile:
                     description: |-
@@ -2270,9 +2386,11 @@ spec:
                     type: object
                 type: object
               serviceType:
-                description: Service Type string describes ingress methods for a service
+                description: ServiceType is the Kubernetes Service type. Defaults
+                  to ClusterIP.
                 type: string
               tolerations:
+                description: Tolerations allow scheduling onto tainted nodes.
                 items:
                   description: |-
                     The pod this Toleration is attached to tolerates any taint that matches
@@ -2321,10 +2439,11 @@ spec:
                 disk
               rule: '!has(self.autoscaling) || !self.autoscaling.enabled || !has(self.disk)'
           status:
+            description: Status reports the observed application state.
             properties:
               conditions:
-                description: Conditions represent the latest available observations
-                  of the AppDefinition's state.
+                description: Conditions report Ready, DiskReady, IngressReady, and
+                  HPAActive status.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -2384,23 +2503,22 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               lastError:
-                description: LastError holds the last reconciliation error message.
+                description: LastError is the most recent reconciliation error message.
                 type: string
               observedGeneration:
-                description: ObservedGeneration is the most recent generation observed.
+                description: ObservedGeneration is the last spec generation reconciled.
                 format: int64
                 type: integer
               phase:
-                description: 'Phase is a high-level summary of the AppDefinition state:
-                  Available, Progressing, Failed, or Paused.'
+                description: 'Phase summarizes readiness: Available, Progressing,
+                  Failed, or Paused.'
                 type: string
               readyReplicas:
-                description: ReadyReplicas is the number of pods targeted by this
-                  AppDefinition with a Ready condition.
+                description: ReadyReplicas is pods with a Ready condition.
                 format: int32
                 type: integer
               replicas:
-                description: Replicas is the desired number of replicas.
+                description: Replicas is the desired replica count from spec.
                 format: int32
                 type: integer
             type: object
