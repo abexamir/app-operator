@@ -1,0 +1,62 @@
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: metrics-demo
+  namespace: default
+spec:
+  containers:
+    # Pushgateway: accepts pushed metrics and re-exposes them for Prometheus.
+    # Exposes its own process + push metrics at port 9091/metrics.
+    - name: pushgateway
+      image: docker.zarrino.tech/prom/pushgateway:v1.9.0
+      ports:
+        - name: push
+          containerPort: 9091
+          servicePort: 9091
+          expose: true
+          metrics:
+            enabled: true
+            path: /metrics
+      readinessProbe:
+        type: httpGet
+        httpGet:
+          path: /-/ready
+          port: 9091
+        initialDelaySeconds: 3
+        periodSeconds: 10
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+
+    # StatsD exporter: translates StatsD protocol to Prometheus format.
+    # Exposes its own process metrics at port 9102/metrics.
+    - name: statsd
+      image: docker.zarrino.tech/prom/statsd-exporter:v0.28.0
+      ports:
+        - name: statsd
+          containerPort: 9102
+          servicePort: 9102
+          expose: true
+          metrics:
+            enabled: true
+            path: /metrics
+      readinessProbe:
+        type: httpGet
+        httpGet:
+          path: /metrics
+          port: 9102
+        initialDelaySeconds: 3
+        periodSeconds: 10
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+
+  replicas: 1
+
+  # The release label must match your Prometheus serviceMonitorSelector (see platform_ops sample).
+  monitoringConfig:
+    enabled: true
+    labels:
+      release: prometheus-stack

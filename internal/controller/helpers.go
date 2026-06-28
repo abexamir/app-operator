@@ -25,6 +25,12 @@ func pvcName(appName string) string {
 	return appName + "-disk"
 }
 
+// serviceMonitorName avoids naming the ServiceMonitor after the app workload;
+// some clusters prune ServiceMonitors that share the app's exact name.
+func serviceMonitorName(appName string) string {
+	return appName + "-monitor"
+}
+
 // resolvedSecretName returns the Kubernetes Secret name for a SecretMount.
 // When SecretRef is set, the referenced secret is used directly (not managed by the operator).
 func resolvedSecretName(appName string, sec v1.SecretMount) string {

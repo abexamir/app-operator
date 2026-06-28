@@ -10,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -22,45 +23,49 @@ const configHashAnnotation = "appdefinition.abexamir.me/config-hash"
 func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDef *v1.AppDefinition) error {
 	logger := log.FromContext(ctx)
 
-	deployment := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      appDef.Name,
-			Namespace: appDef.Namespace,
-		},
-	}
-
-	op, err := ctrl.CreateOrUpdate(ctx, r.Client, deployment, func() error {
-		replicas := int32(1)
-		if appDef.Spec.Replicas != nil {
-			replicas = *appDef.Spec.Replicas
+	var op controllerutil.OperationResult
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		deployment := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      appDef.Name,
+				Namespace: appDef.Namespace,
+			},
 		}
-
-		deployment.Labels = standardLabels(appDef.Name)
-		deployment.Spec.Replicas = &replicas
-		// Selector is immutable after creation; only set it on new deployments.
-		if deployment.Spec.Selector == nil {
-			deployment.Spec.Selector = &metav1.LabelSelector{
-				MatchLabels: selectorLabels(appDef.Name),
+		var innerErr error
+		op, innerErr = ctrl.CreateOrUpdate(ctx, r.Client, deployment, func() error {
+			replicas := int32(1)
+			if appDef.Spec.Replicas != nil {
+				replicas = *appDef.Spec.Replicas
 			}
-		}
-		deployment.Spec.Template.Labels = selectorLabels(appDef.Name)
-		deployment.Spec.Template.Annotations = podTemplateAnnotations(appDef)
 
-		// Surgical pod spec update: only touch fields the operator owns.
-		// Preserving the existing PodSpec keeps Kubernetes-injected defaults
-		// (DNSPolicy, RestartPolicy, etc.) in place across reconciles so that
-		// equality.Semantic.DeepEqual does not see a spurious diff.
-		podSpec := &deployment.Spec.Template.Spec
-		podSpec.SecurityContext = appDef.Spec.SecurityContext
-		podSpec.NodeSelector = appDef.Spec.NodeSelector
-		podSpec.Tolerations = appDef.Spec.Tolerations
-		podSpec.Affinity = appDef.Spec.Affinity
-		podSpec.ImagePullSecrets = appDef.Spec.ImagePullSecrets
-		podSpec.Volumes = buildVolumes(appDef)
-		podSpec.InitContainers = buildInitContainers(appDef)
-		podSpec.Containers = buildContainers(appDef)
+			deployment.Labels = standardLabels(appDef.Name)
+			deployment.Spec.Replicas = &replicas
+			// Selector is immutable after creation; only set it on new deployments.
+			if deployment.Spec.Selector == nil {
+				deployment.Spec.Selector = &metav1.LabelSelector{
+					MatchLabels: selectorLabels(appDef.Name),
+				}
+			}
+			deployment.Spec.Template.Labels = selectorLabels(appDef.Name)
+			deployment.Spec.Template.Annotations = podTemplateAnnotations(appDef)
 
-		return ctrl.SetControllerReference(appDef, deployment, r.Scheme)
+			// Surgical pod spec update: only touch fields the operator owns.
+			// Preserving the existing PodSpec keeps Kubernetes-injected defaults
+			// (DNSPolicy, RestartPolicy, etc.) in place across reconciles so that
+			// equality.Semantic.DeepEqual does not see a spurious diff.
+			podSpec := &deployment.Spec.Template.Spec
+			podSpec.SecurityContext = appDef.Spec.SecurityContext
+			podSpec.NodeSelector = appDef.Spec.NodeSelector
+			podSpec.Tolerations = appDef.Spec.Tolerations
+			podSpec.Affinity = appDef.Spec.Affinity
+			podSpec.ImagePullSecrets = appDef.Spec.ImagePullSecrets
+			podSpec.Volumes = buildVolumes(appDef)
+			podSpec.InitContainers = buildInitContainers(appDef)
+			podSpec.Containers = buildContainers(appDef)
+
+			return ctrl.SetControllerReference(appDef, deployment, r.Scheme)
+		})
+		return innerErr
 	})
 
 	if err != nil {

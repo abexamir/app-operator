@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -26,7 +26,7 @@ var serviceMonitorGVK = schema.GroupVersionKind{
 // still works, just without Prometheus scraping.
 func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, appDef *v1.AppDefinition) error {
 	logger := log.FromContext(ctx)
-	smKey := types.NamespacedName{Name: appDef.Name, Namespace: appDef.Namespace}
+	smKey := types.NamespacedName{Name: serviceMonitorName(appDef.Name), Namespace: appDef.Namespace}
 
 	enabled := hasMetricsEnabled(appDef) ||
 		(appDef.Spec.MonitoringConfig != nil && appDef.Spec.MonitoringConfig.Enabled)
@@ -36,9 +36,9 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 	existing.SetGroupVersionKind(serviceMonitorGVK)
 
 	if !enabled || len(endpoints) == 0 {
-		// Remove any previously created ServiceMonitor.
 		err := r.Get(ctx, smKey, existing)
 		if err == nil {
+			logger.Info("deleting ServiceMonitor")
 			return r.Delete(ctx, existing)
 		}
 		if apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
@@ -47,7 +47,6 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 		return err
 	}
 
-	// Build labels: standard labels plus any extra labels from monitoringConfig.
 	labels := make(map[string]interface{})
 	for k, v := range standardLabels(appDef.Name) {
 		labels[k] = v
@@ -63,7 +62,7 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 			"apiVersion": "monitoring.coreos.com/v1",
 			"kind":       "ServiceMonitor",
 			"metadata": map[string]interface{}{
-				"name":      appDef.Name,
+				"name":      serviceMonitorName(appDef.Name),
 				"namespace": appDef.Namespace,
 				"labels":    labels,
 			},
@@ -110,7 +109,6 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 	return r.Update(ctx, desired)
 }
 
-// hasMetricsEnabled reports whether any port across all containers has metrics.enabled = true.
 func hasMetricsEnabled(appDef *v1.AppDefinition) bool {
 	for _, c := range appDef.Spec.Containers {
 		for _, p := range c.Ports {
@@ -122,8 +120,6 @@ func hasMetricsEnabled(appDef *v1.AppDefinition) bool {
 	return false
 }
 
-// buildSMEndpoints builds the Prometheus scrape endpoint list for the ServiceMonitor.
-// Port-level metrics fields take precedence over the legacy per-port metricsPath approach.
 func buildSMEndpoints(appDef *v1.AppDefinition) []interface{} {
 	if hasMetricsEnabled(appDef) {
 		var endpoints []interface{}
@@ -147,7 +143,9 @@ func buildSMEndpoints(appDef *v1.AppDefinition) []interface{} {
 		return endpoints
 	}
 
-	// Legacy: per-port metricsPath driven by monitoringConfig.
+	if appDef.Spec.MonitoringConfig == nil || !appDef.Spec.MonitoringConfig.Enabled {
+		return nil
+	}
 	var endpoints []interface{}
 	seen := map[string]bool{}
 	for _, c := range appDef.Spec.Containers {
@@ -160,7 +158,7 @@ func buildSMEndpoints(appDef *v1.AppDefinition) []interface{} {
 				"port": p.Name,
 				"path": p.MetricsPath,
 			}
-			if appDef.Spec.MonitoringConfig != nil && appDef.Spec.MonitoringConfig.ScrapeInterval != "" {
+			if appDef.Spec.MonitoringConfig.ScrapeInterval != "" {
 				ep["interval"] = appDef.Spec.MonitoringConfig.ScrapeInterval
 			}
 			endpoints = append(endpoints, ep)

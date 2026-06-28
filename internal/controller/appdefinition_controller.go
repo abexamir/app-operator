@@ -83,6 +83,13 @@ func (r *AppDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	logger.Info("Reconciliation complete")
+	if appDef.Spec.Paused {
+		return ctrl.Result{}, nil
+	}
+	fresh := &v1.AppDefinition{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(appDef), fresh); err == nil && fresh.Status.Phase == "Available" {
+		return ctrl.Result{}, nil
+	}
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 

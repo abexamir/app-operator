@@ -9,16 +9,23 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1 "github.com/abexamir/app-operator/api/v1"
 )
 
 func (r *AppDefinitionReconciler) updateStatus(ctx context.Context, appDef *v1.AppDefinition, reconcileErr error) error {
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		return r.updateStatusOnce(ctx, appDef, reconcileErr)
+	})
+}
+
+func (r *AppDefinitionReconciler) updateStatusOnce(ctx context.Context, appDef *v1.AppDefinition, reconcileErr error) error {
 	desiredReplicas := int32(1)
 	if appDef.Spec.Replicas != nil {
 		desiredReplicas = *appDef.Spec.Replicas

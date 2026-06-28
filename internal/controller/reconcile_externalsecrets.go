@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -126,11 +127,16 @@ func (r *AppDefinitionReconciler) reconcileExternalSecrets(ctx context.Context, 
 			return fmt.Errorf("getting ExternalSecret %s: %w", name, err)
 		}
 
-		desired.SetResourceVersion(existing.GetResourceVersion())
-		logger.Info("updating ExternalSecret", "name", name)
-		if err := r.Update(ctx, desired); err != nil {
+		if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			if err := r.APIReader.Get(ctx, key, existing); err != nil {
+				return err
+			}
+			desired.SetResourceVersion(existing.GetResourceVersion())
+			return r.Update(ctx, desired)
+		}); err != nil {
 			return fmt.Errorf("updating ExternalSecret %s: %w", name, err)
 		}
+		logger.Info("updating ExternalSecret", "name", name)
 	}
 	return nil
 }

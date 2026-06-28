@@ -1,0 +1,70 @@
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: disk-metrics-demo
+  namespace: default
+spec:
+  containers:
+    # Pushgateway: persists pushed metrics to the attached disk.
+    - name: pushgateway
+      image: docker.zarrino.tech/prom/pushgateway:v1.9.0
+      args:
+        - --persistence.file=/data/pushgateway.data
+        - --persistence.interval=5m
+      ports:
+        - name: push
+          containerPort: 9091
+          servicePort: 9091
+          expose: true
+          metrics:
+            enabled: true
+            path: /metrics
+      readinessProbe:
+        type: httpGet
+        httpGet:
+          path: /-/ready
+          port: 9091
+        initialDelaySeconds: 3
+        periodSeconds: 10
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+
+    # StatsD exporter: second scrape target on a separate port.
+    - name: statsd
+      image: docker.zarrino.tech/prom/statsd-exporter:v0.28.0
+      ports:
+        - name: statsd
+          containerPort: 9102
+          servicePort: 9102
+          expose: true
+          metrics:
+            enabled: true
+            path: /metrics
+      readinessProbe:
+        type: httpGet
+        httpGet:
+          path: /metrics
+          port: 9102
+        initialDelaySeconds: 3
+        periodSeconds: 10
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+
+  # disk forces replicas: 1 — ReadWriteOnce PVCs allow a single writer.
+  replicas: 1
+
+  disk:
+    sizeInGi: 2
+    storageClassName: local-path
+    partitions:
+      - mountPath: /data
+        subPath: data
+
+  monitoringConfig:
+    enabled: true
+    labels:
+      release: prometheus-stack
