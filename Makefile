@@ -1,5 +1,7 @@
 # Image URL to use all building/pushing image targets
 IMG ?= controller:develop
+APISERVER_IMG ?= apiserver:develop
+UI_IMG ?= ui:develop
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -102,9 +104,17 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
+.PHONY: build-apiserver
+build-apiserver: fmt vet ## Build API server binary.
+	go build -o bin/apiserver ./cmd/apiserver/
+
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
+
+.PHONY: run-apiserver
+run-apiserver: ## Run the API server from your host.
+	go run ./cmd/apiserver/
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
@@ -116,6 +126,22 @@ docker-build: ## Build docker image with the manager.
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
+
+.PHONY: docker-build-apiserver
+docker-build-apiserver: ## Build docker image with the API server.
+	$(CONTAINER_TOOL) build -t ${APISERVER_IMG} -f Dockerfile.apiserver .
+
+.PHONY: docker-push-apiserver
+docker-push-apiserver: ## Push docker image with the API server.
+	$(CONTAINER_TOOL) push ${APISERVER_IMG}
+
+.PHONY: docker-build-ui
+docker-build-ui: ## Build docker image with the UI.
+	$(CONTAINER_TOOL) build -t ${UI_IMG} -f Dockerfile.ui .
+
+.PHONY: docker-push-ui
+docker-push-ui: ## Push docker image with the UI.
+	$(CONTAINER_TOOL) push ${UI_IMG}
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
@@ -162,6 +188,24 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+
+.PHONY: deploy-apiserver
+deploy-apiserver: kustomize ## Deploy API server to the K8s cluster specified in ~/.kube/config.
+	cd config/apiserver && $(KUSTOMIZE) edit set image apiserver=${APISERVER_IMG}
+	$(KUSTOMIZE) build config/apiserver | $(KUBECTL) apply -f -
+
+.PHONY: undeploy-apiserver
+undeploy-apiserver: kustomize ## Undeploy API server from the K8s cluster specified in ~/.kube/config.
+	$(KUSTOMIZE) build config/apiserver | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+
+.PHONY: deploy-ui
+deploy-ui: kustomize ## Deploy UI to the K8s cluster specified in ~/.kube/config.
+	cd config/ui && $(KUSTOMIZE) edit set image ui=${UI_IMG}
+	$(KUSTOMIZE) build config/ui | $(KUBECTL) apply -f -
+
+.PHONY: undeploy-ui
+undeploy-ui: kustomize ## Undeploy UI from the K8s cluster specified in ~/.kube/config.
+	$(KUSTOMIZE) build config/ui | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
 ##@ Dependencies
 

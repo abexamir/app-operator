@@ -441,8 +441,8 @@ func buildProbe(p *v1.Probe) *corev1.Probe {
 	if probe.FailureThreshold == 0 {
 		probe.FailureThreshold = 3
 	}
-	if probe.ProbeHandler.HTTPGet != nil && probe.ProbeHandler.HTTPGet.Scheme == "" {
-		probe.ProbeHandler.HTTPGet.Scheme = corev1.URISchemeHTTP
+	if probe.HTTPGet != nil && probe.HTTPGet.Scheme == "" {
+		probe.HTTPGet.Scheme = corev1.URISchemeHTTP
 	}
 	return probe
 }

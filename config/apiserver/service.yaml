@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-operator-apiserver
+  namespace: appoperator-system
+  labels:
+    app.kubernetes.io/name: app-operator-apiserver
+    app.kubernetes.io/component: apiserver
+spec:
+  selector:
+    app.kubernetes.io/name: app-operator-apiserver
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

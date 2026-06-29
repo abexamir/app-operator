@@ -1,0 +1,21 @@
+FROM golang:1.24 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /workspace
+COPY go.mod go.mod
+COPY go.sum go.sum
+RUN go mod download
+
+COPY cmd/apiserver/ cmd/apiserver/
+COPY api/ api/
+COPY internal/apiserver/ internal/apiserver/
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o apiserver ./cmd/apiserver/
+
+FROM gcr.io/distroless/static:nonroot
+WORKDIR /
+COPY --from=builder /workspace/apiserver .
+USER 65532:65532
+
+ENTRYPOINT ["/apiserver"]

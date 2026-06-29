@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- rbac.yaml
+- deployment.yaml
+- service.yaml
+images:
+- name: apiserver
+  newName: apiserver
+  newTag: 20260629174931-588af8f

@@ -6,6 +6,7 @@
 *.dylib
 bin/*
 Dockerfile.cross
+/apiserver
 
 # Test binary, built with `go test -c`
 *.test
@@ -25,3 +26,7 @@ go.work
 *.swp
 *.swo
 *~
+
+# UI build output and dependencies
+ui/dist/
+ui/node_modules/

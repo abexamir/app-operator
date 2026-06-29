@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-operator-apiserver
+  namespace: appoperator-system
+  labels:
+    app.kubernetes.io/name: app-operator-apiserver
+    app.kubernetes.io/component: apiserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: app-operator-apiserver
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: app-operator-apiserver
+        app.kubernetes.io/component: apiserver
+    spec:
+      serviceAccountName: app-operator-apiserver
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: apiserver
+          image: apiserver:latest
+          args:
+            - --bind-address=:8080
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 500m
+              memory: 128Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
