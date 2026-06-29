@@ -60,7 +60,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
 
-      - name: Build and push image
+      - name: Build and push controller image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -68,17 +68,45 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=controller
+          cache-to: type=gha,mode=max,scope=controller
+
+      - name: Build and push apiserver image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.apiserver
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ghcr.io/${{ github.repository }}-apiserver:${{ steps.tag.outputs.value }}
+            ghcr.io/${{ github.repository }}-apiserver:sha-${{ github.sha }}
+          cache-from: type=gha,scope=apiserver
+          cache-to: type=gha,mode=max,scope=apiserver
+
+      - name: Build and push UI image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.ui
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ghcr.io/${{ github.repository }}-ui:${{ steps.tag.outputs.value }}
+            ghcr.io/${{ github.repository }}-ui:sha-${{ github.sha }}
+          cache-from: type=gha,scope=ui
+          cache-to: type=gha,mode=max,scope=ui
 
       - name: Install kustomize
         run: make kustomize
 
       - name: Generate dist/install.yaml
         run: |
-          make build-installer IMG=ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.value }}
-          # Reset the kustomization edit so we don't commit that file
-          git checkout config/manager/kustomization.yaml
+          make build-installer \
+            IMG=ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.value }} \
+            APISERVER_IMG=ghcr.io/${{ github.repository }}-apiserver:${{ steps.tag.outputs.value }} \
+            UI_IMG=ghcr.io/${{ github.repository }}-ui:${{ steps.tag.outputs.value }}
+          git checkout config/manager/kustomization.yaml config/apiserver/kustomization.yaml config/ui/kustomization.yaml
 
       # On pushes to main: commit dist/install.yaml so the raw URL always reflects latest
       - name: Commit dist/install.yaml to main

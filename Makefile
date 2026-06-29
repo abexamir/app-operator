@@ -161,10 +161,12 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	rm Dockerfile.cross
 
 .PHONY: build-installer
-build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
+build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and all components.
 	mkdir -p dist
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUSTOMIZE) build config/default > dist/install.yaml
+	cd config/apiserver && $(KUSTOMIZE) edit set image apiserver=${APISERVER_IMG}
+	cd config/ui && $(KUSTOMIZE) edit set image ui=${UI_IMG}
+	$(KUSTOMIZE) build config/all > dist/install.yaml
 
 ##@ Deployment
 
