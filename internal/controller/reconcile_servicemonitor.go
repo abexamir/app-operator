@@ -34,7 +34,7 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 	existing.SetGroupVersionKind(serviceMonitorGVK)
 
 	if len(endpoints) == 0 {
-		err := r.Get(ctx, smKey, existing)
+		err := r.APIReader.Get(ctx, smKey, existing)
 		if err == nil {
 			logger.Info("deleting ServiceMonitor")
 			return r.Delete(ctx, existing)
@@ -72,7 +72,7 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 		return fmt.Errorf("setting owner reference on ServiceMonitor: %w", err)
 	}
 
-	err := r.Get(ctx, smKey, existing)
+	err := r.APIReader.Get(ctx, smKey, existing)
 	if err != nil {
 		if apimeta.IsNoMatchError(err) {
 			logger.V(1).Info("ServiceMonitor CRD not installed, skipping")
