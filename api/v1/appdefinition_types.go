@@ -65,7 +65,8 @@ type DiskConfig struct {
 	// +kubebuilder:validation:Minimum=1
 	SizeInGi int `json:"sizeInGi"`
 	// StorageClassName is the StorageClass used to provision the PVC.
-	StorageClassName string `json:"storageClassName"`
+	// Omit to use the cluster default StorageClass.
+	StorageClassName string `json:"storageClassName,omitempty"`
 	// SetFsGroup injects fsGroup into the pod securityContext for group write access
 	// to the volume. Prefer spec.securityContext.fsGroup for an explicit GID.
 	SetFsGroup bool `json:"setFsGroup,omitempty"`

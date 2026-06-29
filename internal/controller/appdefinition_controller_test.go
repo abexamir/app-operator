@@ -111,6 +111,34 @@ var _ = Describe("AppDefinition Controller", func() {
 			Expect(deployment.Spec.Strategy.Type).To(Equal(appsv1.RollingUpdateDeploymentStrategyType))
 		})
 
+		It("should omit storageClassName on PVC when disk has no storage class", func() {
+			scName := types.NamespacedName{Name: "disk-default-sc-test", Namespace: namespace}
+			app := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: scName.Name, Namespace: namespace},
+				Spec: appdefinitionv1.AppDefinitionSpec{
+					Containers: []appdefinitionv1.ContainerSpec{
+						{
+							Name:  "app",
+							Image: "busybox:1.36",
+							Ports: []appdefinitionv1.PortSpec{
+								{Name: "http", ContainerPort: 8080, ServicePort: 80, Expose: true},
+							},
+						},
+					},
+					Disk: &appdefinitionv1.DiskConfig{SizeInGi: 1},
+				},
+			}
+			Expect(k8sClient.Create(ctx, app)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, app) })
+
+			r := newTestReconciler()
+			reconcileTwice(r, scName)
+
+			pvc := &corev1.PersistentVolumeClaim{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: scName.Name + "-disk", Namespace: namespace}, pvc)).To(Succeed())
+			Expect(pvc.Spec.StorageClassName).To(BeNil())
+		})
+
 		It("should use Recreate strategy for stateful apps with disk", func() {
 			statefulName := types.NamespacedName{Name: "stateful-test", Namespace: namespace}
 			stateful := &appdefinitionv1.AppDefinition{

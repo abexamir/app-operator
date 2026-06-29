@@ -1603,12 +1603,12 @@ spec:
                     minimum: 1
                     type: integer
                   storageClassName:
-                    description: StorageClassName is the StorageClass used to provision
-                      the PVC.
+                    description: |-
+                      StorageClassName is the StorageClass used to provision the PVC.
+                      Omit to use the cluster default StorageClass.
                     type: string
                 required:
                 - sizeInGi
-                - storageClassName
                 type: object
               domains:
                 description: Domains creates an Ingress with one rule per entry.

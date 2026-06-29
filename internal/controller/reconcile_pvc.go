@@ -59,8 +59,7 @@ func (r *AppDefinitionReconciler) reconcilePVC(ctx context.Context, appDef *v1.A
 		requested := resource.MustParse(fmt.Sprintf("%dGi", appDef.Spec.Disk.SizeInGi))
 
 		if pvc.ResourceVersion == "" {
-			// New PVC: set full spec.
-			storageClass := appDef.Spec.Disk.StorageClassName
+			// New PVC: set full spec. Omit storageClassName to use the cluster default.
 			pvc.Spec = corev1.PersistentVolumeClaimSpec{
 				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 				Resources: corev1.VolumeResourceRequirements{
@@ -68,7 +67,9 @@ func (r *AppDefinitionReconciler) reconcilePVC(ctx context.Context, appDef *v1.A
 						corev1.ResourceStorage: requested,
 					},
 				},
-				StorageClassName: &storageClass,
+			}
+			if sc := appDef.Spec.Disk.StorageClassName; sc != "" {
+				pvc.Spec.StorageClassName = &sc
 			}
 		} else {
 			// Existing PVC: attempt expansion if size increased.

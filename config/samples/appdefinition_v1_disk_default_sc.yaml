@@ -1,0 +1,33 @@
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: disk-default-sc
+  namespace: default
+spec:
+  containers:
+    - name: app
+      image: docker.zarrino.tech/busybox:1.36
+      command: ["/bin/sh", "-c", "while true; do date >> /data/heartbeat; sleep 30; done"]
+      ports:
+        - name: http
+          containerPort: 8080
+          servicePort: 80
+          expose: true
+      readinessProbe:
+        type: exec
+        exec:
+          command: ["/bin/sh", "-c", "test -f /data/heartbeat || true"]
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      resources:
+        requests:
+          cpu: "10m"
+          memory: "16Mi"
+
+  replicas: 1
+
+  disk:
+    sizeInGi: 1
+    partitions:
+      - mountPath: /data
+        subPath: data
