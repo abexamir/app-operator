@@ -1568,8 +1568,8 @@ spec:
                     type: object
                   partitions:
                     description: |-
-                      Partitions mount subdirectories of the PVC at different paths. When empty,
-                      the entire volume is mounted at /data in every container.
+                      Partitions mount subdirectories of the PVC at different paths inside every container.
+                      At least one partition is required.
                     items:
                       description: DiskPartition mounts a subdirectory of the app
                         PVC into a container path.
@@ -1586,6 +1586,7 @@ spec:
                       - mountPath
                       - subPath
                       type: object
+                    minItems: 1
                     type: array
                   protect:
                     description: |-
@@ -1608,8 +1609,12 @@ spec:
                       Omit to use the cluster default StorageClass.
                     type: string
                 required:
+                - partitions
                 - sizeInGi
                 type: object
+                x-kubernetes-validations:
+                - message: disk requires at least one partition
+                  rule: size(self.partitions) > 0
               domains:
                 description: Domains creates an Ingress with one rule per entry.
                 items:

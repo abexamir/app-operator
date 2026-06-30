@@ -125,7 +125,10 @@ var _ = Describe("AppDefinition Controller", func() {
 							},
 						},
 					},
-					Disk: &appdefinitionv1.DiskConfig{SizeInGi: 1},
+					Disk: &appdefinitionv1.DiskConfig{
+						SizeInGi:   1,
+						Partitions: []appdefinitionv1.DiskPartition{{SubPath: "data", MountPath: "/data"}},
+					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, app)).To(Succeed())
@@ -156,6 +159,7 @@ var _ = Describe("AppDefinition Controller", func() {
 					Disk: &appdefinitionv1.DiskConfig{
 						SizeInGi:         1,
 						StorageClassName: "standard",
+						Partitions:       []appdefinitionv1.DiskPartition{{SubPath: "data", MountPath: "/data"}},
 					},
 				},
 			}

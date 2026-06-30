@@ -59,7 +59,9 @@ type DiskPartition struct {
 
 // DiskConfig provisions a ReadWriteOnce PVC named "<app>-disk" and mounts it into
 // every container. Apps with disk are stateful: limited to one replica, Recreate
-// deployment strategy, and no autoscaling.
+// deployment strategy, and no autoscaling. At least one partition is required.
+//
+// +kubebuilder:validation:XValidation:rule="size(self.partitions) > 0",message="disk requires at least one partition"
 type DiskConfig struct {
 	// SizeInGi is the requested PVC capacity in gibibytes.
 	// +kubebuilder:validation:Minimum=1
@@ -70,9 +72,10 @@ type DiskConfig struct {
 	// SetFsGroup injects fsGroup into the pod securityContext for group write access
 	// to the volume. Prefer spec.securityContext.fsGroup for an explicit GID.
 	SetFsGroup bool `json:"setFsGroup,omitempty"`
-	// Partitions mount subdirectories of the PVC at different paths. When empty,
-	// the entire volume is mounted at /data in every container.
-	Partitions []DiskPartition `json:"partitions,omitempty"`
+	// Partitions mount subdirectories of the PVC at different paths inside every container.
+	// At least one partition is required.
+	// +kubebuilder:validation:MinItems=1
+	Partitions []DiskPartition `json:"partitions"`
 	// Annotations are merged into PVC metadata on every reconcile. Provisioner-owned
 	// annotations (e.g. pv.kubernetes.io/bind-completed) are never removed.
 	Annotations map[string]string `json:"annotations,omitempty"`

@@ -226,11 +226,7 @@ func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
 func buildVolumeMounts(appDef *v1.AppDefinition) []corev1.VolumeMount {
 	mountCount := len(appDef.Spec.ConfigMaps)
 	if appDef.Spec.Disk != nil {
-		if len(appDef.Spec.Disk.Partitions) == 0 {
-			mountCount++ // default /data mount
-		} else {
-			mountCount += len(appDef.Spec.Disk.Partitions)
-		}
+		mountCount += len(appDef.Spec.Disk.Partitions)
 	}
 	for _, sec := range appDef.Spec.Secrets {
 		if sec.MountPath != "" {
@@ -240,19 +236,12 @@ func buildVolumeMounts(appDef *v1.AppDefinition) []corev1.VolumeMount {
 	mounts := make([]corev1.VolumeMount, 0, mountCount)
 
 	if appDef.Spec.Disk != nil {
-		if len(appDef.Spec.Disk.Partitions) == 0 {
+		for _, p := range appDef.Spec.Disk.Partitions {
 			mounts = append(mounts, corev1.VolumeMount{
 				Name:      "app-disk",
-				MountPath: "/data",
+				MountPath: p.MountPath,
+				SubPath:   p.SubPath,
 			})
-		} else {
-			for _, p := range appDef.Spec.Disk.Partitions {
-				mounts = append(mounts, corev1.VolumeMount{
-					Name:      "app-disk",
-					MountPath: p.MountPath,
-					SubPath:   p.SubPath,
-				})
-			}
 		}
 	}
 	for _, cm := range appDef.Spec.ConfigMaps {

@@ -39,6 +39,18 @@ func (r *AppDefinitionReconciler) reconcileIngress(ctx context.Context, appDef *
 			ingress.Spec.IngressClassName = nil
 		}
 
+		// Merge per-domain annotations over all domains (TLS and non-TLS).
+		// Done before the TLS/rules loops so domain annotations can be overridden
+		// by cert-manager issuer annotations set in the TLS pass below.
+		for _, domain := range appDef.Spec.Domains {
+			if domain.TLS && domain.RedirectTLS {
+				ingress.Annotations["nginx.ingress.kubernetes.io/force-ssl-redirect"] = "true"
+			}
+			for k, v := range domain.Annotations {
+				ingress.Annotations[k] = v
+			}
+		}
+
 		// Build TLS blocks — one entry per TLS-enabled domain with its own secret.
 		ingress.Spec.TLS = nil
 		for _, domain := range appDef.Spec.Domains {
@@ -56,15 +68,6 @@ func (r *AppDefinitionReconciler) reconcileIngress(ctx context.Context, appDef *
 			// Per-domain cert-manager issuer annotation.
 			if domain.CertIssuer != "" {
 				ingress.Annotations["cert-manager.io/cluster-issuer"] = domain.CertIssuer
-			}
-			// Per-domain TLS redirect — applies the nginx force-ssl-redirect annotation
-			// if any TLS domain requests it.
-			if domain.RedirectTLS {
-				ingress.Annotations["nginx.ingress.kubernetes.io/force-ssl-redirect"] = "true"
-			}
-			// Per-domain annotations — merged after global IngressAnnotations so they can override.
-			for k, v := range domain.Annotations {
-				ingress.Annotations[k] = v
 			}
 		}
 
