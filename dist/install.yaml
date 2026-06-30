@@ -2995,11 +2995,11 @@ spec:
           periodSeconds: 10
         resources:
           limits:
-            cpu: 500m
-            memory: 128Mi
+            cpu: 1000m
+            memory: 512Mi
           requests:
-            cpu: 10m
-            memory: 32Mi
+            cpu: 500m
+            memory: 256Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -3050,11 +3050,11 @@ spec:
           periodSeconds: 10
         resources:
           limits:
-            cpu: 100m
-            memory: 64Mi
+            cpu: 500m
+            memory: 256Mi
           requests:
-            cpu: 10m
-            memory: 16Mi
+            cpu: 250m
+            memory: 128Mi
       securityContext:
         runAsNonRoot: false
 ---
@@ -3105,11 +3105,11 @@ spec:
           periodSeconds: 10
         resources:
           limits:
-            cpu: 500m
-            memory: 128Mi
+            cpu: 1000m
+            memory: 1024Mi
           requests:
-            cpu: 10m
-            memory: 64Mi
+            cpu: 500m
+            memory: 512Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
