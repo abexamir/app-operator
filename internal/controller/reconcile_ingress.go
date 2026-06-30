@@ -31,8 +31,12 @@ func (r *AppDefinitionReconciler) reconcileIngress(ctx context.Context, appDef *
 		for k, v := range appDef.Spec.IngressAnnotations {
 			ingress.Annotations[k] = v
 		}
+
+		// Always assign IngressClassName so that clearing the field removes it from the Ingress.
 		if appDef.Spec.IngressClass != "" {
 			ingress.Spec.IngressClassName = &appDef.Spec.IngressClass
+		} else {
+			ingress.Spec.IngressClassName = nil
 		}
 
 		// Build TLS blocks — one entry per TLS-enabled domain with its own secret.
@@ -52,6 +56,15 @@ func (r *AppDefinitionReconciler) reconcileIngress(ctx context.Context, appDef *
 			// Per-domain cert-manager issuer annotation.
 			if domain.CertIssuer != "" {
 				ingress.Annotations["cert-manager.io/cluster-issuer"] = domain.CertIssuer
+			}
+			// Per-domain TLS redirect — applies the nginx force-ssl-redirect annotation
+			// if any TLS domain requests it.
+			if domain.RedirectTLS {
+				ingress.Annotations["nginx.ingress.kubernetes.io/force-ssl-redirect"] = "true"
+			}
+			// Per-domain annotations — merged after global IngressAnnotations so they can override.
+			for k, v := range domain.Annotations {
+				ingress.Annotations[k] = v
 			}
 		}
 

@@ -55,7 +55,7 @@ func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDe
 			// (DNSPolicy, RestartPolicy, etc.) in place across reconciles so that
 			// equality.Semantic.DeepEqual does not see a spurious diff.
 			podSpec := &deployment.Spec.Template.Spec
-			podSpec.SecurityContext = appDef.Spec.SecurityContext
+			podSpec.SecurityContext = securityContext(appDef)
 			podSpec.NodeSelector = appDef.Spec.NodeSelector
 			podSpec.Tolerations = appDef.Spec.Tolerations
 			podSpec.Affinity = appDef.Spec.Affinity
@@ -226,7 +226,11 @@ func buildVolumes(appDef *v1.AppDefinition) []corev1.Volume {
 func buildVolumeMounts(appDef *v1.AppDefinition) []corev1.VolumeMount {
 	mountCount := len(appDef.Spec.ConfigMaps)
 	if appDef.Spec.Disk != nil {
-		mountCount += len(appDef.Spec.Disk.Partitions)
+		if len(appDef.Spec.Disk.Partitions) == 0 {
+			mountCount++ // default /data mount
+		} else {
+			mountCount += len(appDef.Spec.Disk.Partitions)
+		}
 	}
 	for _, sec := range appDef.Spec.Secrets {
 		if sec.MountPath != "" {
@@ -236,12 +240,19 @@ func buildVolumeMounts(appDef *v1.AppDefinition) []corev1.VolumeMount {
 	mounts := make([]corev1.VolumeMount, 0, mountCount)
 
 	if appDef.Spec.Disk != nil {
-		for _, p := range appDef.Spec.Disk.Partitions {
+		if len(appDef.Spec.Disk.Partitions) == 0 {
 			mounts = append(mounts, corev1.VolumeMount{
 				Name:      "app-disk",
-				MountPath: p.MountPath,
-				SubPath:   p.SubPath,
+				MountPath: "/data",
 			})
+		} else {
+			for _, p := range appDef.Spec.Disk.Partitions {
+				mounts = append(mounts, corev1.VolumeMount{
+					Name:      "app-disk",
+					MountPath: p.MountPath,
+					SubPath:   p.SubPath,
+				})
+			}
 		}
 	}
 	for _, cm := range appDef.Spec.ConfigMaps {
@@ -412,6 +423,28 @@ func buildInitContainers(appDef *v1.AppDefinition) []corev1.Container {
 		containers = append(containers, container)
 	}
 	return containers
+}
+
+// securityContext returns the pod-level SecurityContext, injecting fsGroup when
+// disk.setFsGroup is true and no explicit fsGroup is already configured.
+func securityContext(appDef *v1.AppDefinition) *corev1.PodSecurityContext {
+	sc := appDef.Spec.SecurityContext
+	if appDef.Spec.Disk == nil || !appDef.Spec.Disk.SetFsGroup {
+		return sc
+	}
+	const defaultFSGroup = int64(1000)
+	if sc == nil {
+		g := defaultFSGroup
+		return &corev1.PodSecurityContext{FSGroup: &g}
+	}
+	if sc.FSGroup != nil {
+		return sc
+	}
+	// Shallow-copy to avoid mutating the cached AppDefinition object.
+	g := defaultFSGroup
+	copy := *sc
+	copy.FSGroup = &g
+	return &copy
 }
 
 func buildProbe(p *v1.Probe) *corev1.Probe {
