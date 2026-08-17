@@ -16,10 +16,35 @@ import (
 	v1 "github.com/abexamir/app-operator/api/v1"
 )
 
-var externalSecretGVK = schema.GroupVersionKind{
-	Group:   "external-secrets.io",
-	Version: "v1",
-	Kind:    "ExternalSecret",
+// externalSecretGroupKind identifies ExternalSecret independent of API version — ESO promoted
+// this kind v1alpha1 -> v1beta1 -> v1 across its own releases, and different clusters this
+// operator targets run different ESO versions (this repo's dev cluster has v1; Zarrino's
+// production cluster, running ESO since 2023, only serves v1alpha1/v1beta1 — v1 404s there with a
+// NoMatchError). See resolveExternalSecretGVK.
+var externalSecretGroupKind = schema.GroupKind{Group: "external-secrets.io", Kind: "ExternalSecret"}
+
+// externalSecretAPIVersions is the preference order resolveExternalSecretGVK tries. Was
+// previously hardcoded to v1 alone, which silently no-op'd ExternalSecret creation on any cluster
+// that hadn't upgraded ESO past v1beta1 — indistinguishable from "ESO not installed at all" (both
+// surface as apimeta.IsNoMatchError), so this went unnoticed until checked against a real
+// cluster's installed CRDs (`kubectl get crd externalsecrets.external-secrets.io -o
+// jsonpath='{.spec.versions[*].name}'` — confirm this if the CRD ever adds/drops a version).
+var externalSecretAPIVersions = []string{"v1", "v1beta1", "v1alpha1"}
+
+// resolveExternalSecretGVK finds the first ExternalSecret API version the cluster's RESTMapper
+// actually recognizes, trying externalSecretAPIVersions in order. Returns the same
+// apimeta-recognizable NoMatchError the mapper itself returns when none of them exist, so
+// callers' existing apimeta.IsNoMatchError graceful-skip handling doesn't need to change.
+func resolveExternalSecretGVK(mapper apimeta.RESTMapper) (schema.GroupVersionKind, error) {
+	var lastErr error
+	for _, version := range externalSecretAPIVersions {
+		mapping, err := mapper.RESTMapping(externalSecretGroupKind, version)
+		if err == nil {
+			return mapping.GroupVersionKind, nil
+		}
+		lastErr = err
+	}
+	return schema.GroupVersionKind{}, lastErr
 }
 
 // reconcileExternalSecrets creates or updates an ExternalSecret for each entry in
@@ -33,6 +58,15 @@ func (r *AppDefinitionReconciler) reconcileExternalSecrets(ctx context.Context, 
 		return nil
 	}
 	logger := log.FromContext(ctx)
+
+	externalSecretGVK, err := resolveExternalSecretGVK(r.RESTMapper())
+	if err != nil {
+		if apimeta.IsNoMatchError(err) {
+			logger.V(1).Info("ExternalSecret CRD not installed, skipping")
+			return nil
+		}
+		return fmt.Errorf("resolving ExternalSecret API version: %w", err)
+	}
 
 	for _, es := range appDef.Spec.ExternalSecrets {
 		name := appDef.Name + "-" + es.Name
@@ -76,8 +110,8 @@ func (r *AppDefinitionReconciler) reconcileExternalSecrets(ctx context.Context, 
 
 		desired := &unstructured.Unstructured{
 			Object: map[string]interface{}{
-				"apiVersion": "external-secrets.io/v1",
-				"kind":       "ExternalSecret",
+				"apiVersion": externalSecretGVK.GroupVersion().String(),
+				"kind":       externalSecretGVK.Kind,
 				"metadata": map[string]interface{}{
 					"name":      name,
 					"namespace": appDef.Namespace,
