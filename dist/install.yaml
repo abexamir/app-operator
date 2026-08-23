@@ -2398,6 +2398,16 @@ spec:
                         type: string
                     type: object
                 type: object
+              serviceAccountName:
+                description: |-
+                  ServiceAccountName sets the pod's ServiceAccount. Defaults to the namespace's
+                  "default" ServiceAccount when unset (standard Kubernetes behavior). This is
+                  independent of the default SecretStore's own ServiceAccount (see
+                  externalSecrets and reconcileDefaultSecretStore) — that one is always the
+                  shared, namespace-wide default the External Secrets Operator controller
+                  authenticates to Vault with; this field is for apps whose own pod needs a
+                  distinct identity for other Kubernetes RBAC.
+                type: string
               serviceType:
                 description: ServiceType is the Kubernetes Service type. Defaults
                   to ClusterIP.
@@ -2731,6 +2741,15 @@ rules:
   - list
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
   - appdefinition.abexamir.me
   resources:
   - appdefinitions
@@ -2791,6 +2810,15 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - external-secrets.io
+  resources:
+  - secretstores
+  verbs:
+  - create
+  - get
+  - list
   - watch
 - apiGroups:
   - monitoring.coreos.com
