@@ -36,15 +36,7 @@ var externalSecretAPIVersions = []string{"v1", "v1beta1", "v1alpha1"}
 // apimeta-recognizable NoMatchError the mapper itself returns when none of them exist, so
 // callers' existing apimeta.IsNoMatchError graceful-skip handling doesn't need to change.
 func resolveExternalSecretGVK(mapper apimeta.RESTMapper) (schema.GroupVersionKind, error) {
-	var lastErr error
-	for _, version := range externalSecretAPIVersions {
-		mapping, err := mapper.RESTMapping(externalSecretGroupKind, version)
-		if err == nil {
-			return mapping.GroupVersionKind, nil
-		}
-		lastErr = err
-	}
-	return schema.GroupVersionKind{}, lastErr
+	return resolvePreferredGVK(mapper, externalSecretGroupKind, externalSecretAPIVersions)
 }
 
 // reconcileExternalSecrets creates or updates an ExternalSecret for each entry in

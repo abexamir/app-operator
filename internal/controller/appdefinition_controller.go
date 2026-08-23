@@ -43,8 +43,10 @@ type AppDefinitionReconciler struct {
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=external-secrets.io,resources=externalsecrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=external-secrets.io,resources=secretstores,verbs=get;list;watch;create
 
 func (r *AppDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -112,6 +114,9 @@ func (r *AppDefinitionReconciler) reconcileAll(ctx context.Context, appDef *v1.A
 		return err
 	}
 	if err := r.reconcileSecrets(ctx, appDef); err != nil {
+		return err
+	}
+	if err := r.reconcileDefaultSecretStore(ctx, appDef); err != nil {
 		return err
 	}
 	if err := r.reconcileExternalSecrets(ctx, appDef); err != nil {

@@ -109,6 +109,32 @@ var _ = Describe("AppDefinition Controller", func() {
 			Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
 			Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal("nginx:latest"))
 			Expect(deployment.Spec.Strategy.Type).To(Equal(appsv1.RollingUpdateDeploymentStrategyType))
+			// serviceAccountName unset in spec -> pod spec's own field must stay empty
+			// (Kubernetes then defaults to the namespace's "default" SA on its own),
+			// never silently defaulted to something else by the operator.
+			Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(BeEmpty())
+		})
+
+		It("should set a custom ServiceAccountName on the pod when specified", func() {
+			customSAName := types.NamespacedName{Name: "custom-sa-test", Namespace: namespace}
+			customSA := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: customSAName.Name, Namespace: namespace},
+				Spec: appdefinitionv1.AppDefinitionSpec{
+					Containers: []appdefinitionv1.ContainerSpec{
+						{Name: "web", Image: "nginx:latest"},
+					},
+					ServiceAccountName: "my-custom-sa",
+				},
+			}
+			Expect(k8sClient.Create(ctx, customSA)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, customSA) })
+
+			r := newTestReconciler()
+			reconcileTwice(r, customSAName)
+
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, customSAName, deployment)).To(Succeed())
+			Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(Equal("my-custom-sa"))
 		})
 
 		It("should omit storageClassName on PVC when disk has no storage class", func() {

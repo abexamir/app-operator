@@ -331,6 +331,14 @@ type AppDefinitionSpec struct {
 	Lifecycle *LifecycleSpec `json:"lifecycle,omitempty"`
 	// SecurityContext is the pod-level security context applied to every container.
 	SecurityContext *corev1.PodSecurityContext `json:"securityContext,omitempty"`
+	// ServiceAccountName sets the pod's ServiceAccount. Defaults to the namespace's
+	// "default" ServiceAccount when unset (standard Kubernetes behavior). This is
+	// independent of the default SecretStore's own ServiceAccount (see
+	// externalSecrets and reconcileDefaultSecretStore) — that one is always the
+	// shared, namespace-wide default the External Secrets Operator controller
+	// authenticates to Vault with; this field is for apps whose own pod needs a
+	// distinct identity for other Kubernetes RBAC.
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 	// ServiceType is the Kubernetes Service type. Defaults to ClusterIP.
 	ServiceType corev1.ServiceType `json:"serviceType,omitempty"`
 	// IngressClass is the IngressClass name for all domain rules.

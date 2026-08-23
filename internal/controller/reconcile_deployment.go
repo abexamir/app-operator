@@ -56,6 +56,7 @@ func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDe
 			// equality.Semantic.DeepEqual does not see a spurious diff.
 			podSpec := &deployment.Spec.Template.Spec
 			podSpec.SecurityContext = securityContext(appDef)
+			podSpec.ServiceAccountName = appDef.Spec.ServiceAccountName
 			podSpec.NodeSelector = appDef.Spec.NodeSelector
 			podSpec.Tolerations = appDef.Spec.Tolerations
 			podSpec.Affinity = appDef.Spec.Affinity

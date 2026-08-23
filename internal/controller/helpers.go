@@ -4,8 +4,30 @@ import (
 	"fmt"
 	"strings"
 
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	v1 "github.com/abexamir/app-operator/api/v1"
 )
+
+// resolvePreferredGVK finds the first API version of groupKind the cluster's RESTMapper
+// actually recognizes, trying versions in order (newest-first by convention — see callers'
+// own version-list comments for why a given CRD's list is ordered the way it is). Returns
+// the same apimeta-recognizable NoMatchError the mapper itself returns when none of them
+// exist, so callers' apimeta.IsNoMatchError graceful-skip handling doesn't need to change.
+// Shared by every optional/unstructured CRD integration (ExternalSecret, SecretStore, ...)
+// since they all hit the same "which version does this cluster actually serve" problem.
+func resolvePreferredGVK(mapper apimeta.RESTMapper, groupKind schema.GroupKind, versions []string) (schema.GroupVersionKind, error) {
+	var lastErr error
+	for _, version := range versions {
+		mapping, err := mapper.RESTMapping(groupKind, version)
+		if err == nil {
+			return mapping.GroupVersionKind, nil
+		}
+		lastErr = err
+	}
+	return schema.GroupVersionKind{}, lastErr
+}
 
 func standardLabels(name string) map[string]string {
 	return map[string]string{

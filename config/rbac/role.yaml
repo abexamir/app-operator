@@ -28,6 +28,15 @@ rules:
   - list
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
   - appdefinition.abexamir.me
   resources:
   - appdefinitions
@@ -88,6 +97,15 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - external-secrets.io
+  resources:
+  - secretstores
+  verbs:
+  - create
+  - get
+  - list
   - watch
 - apiGroups:
   - monitoring.coreos.com
