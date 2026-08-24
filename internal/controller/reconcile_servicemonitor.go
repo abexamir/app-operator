@@ -37,7 +37,11 @@ func (r *AppDefinitionReconciler) reconcileServiceMonitor(ctx context.Context, a
 		err := r.APIReader.Get(ctx, smKey, existing)
 		if err == nil {
 			logger.Info("deleting ServiceMonitor")
-			return r.Delete(ctx, existing)
+			if err := r.Delete(ctx, existing); err != nil {
+				return err
+			}
+			recordManagedResourcePrune("ServiceMonitor")
+			return nil
 		}
 		if apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
 			return nil

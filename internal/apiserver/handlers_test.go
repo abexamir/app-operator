@@ -114,3 +114,20 @@ func TestCreateRejectsOversizedBody(t *testing.T) {
 		t.Fatalf("expected %d, got %d: %s", http.StatusRequestEntityTooLarge, response.Code, response.Body.String())
 	}
 }
+
+func TestMetricsEndpointReportsHTTPRequests(t *testing.T) {
+	server := newTestServer(t)
+	healthRequest := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	server.Handler().ServeHTTP(httptest.NewRecorder(), healthRequest)
+
+	metricsRequest := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, metricsRequest)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d", http.StatusOK, response.Code)
+	}
+	if !strings.Contains(response.Body.String(), "appoperator_apiserver_http_requests_total") {
+		t.Fatal("expected API server request metric")
+	}
+}

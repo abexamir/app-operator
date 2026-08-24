@@ -399,11 +399,13 @@ type AppDefinitionSpec struct {
 }
 
 const (
-	ConditionTypeReady        = "Ready"
-	ConditionTypeProgressing  = "Progressing"
-	ConditionTypeDiskReady    = "DiskReady"
-	ConditionTypeIngressReady = "IngressReady"
-	ConditionTypeHPAActive    = "HPAActive"
+	ConditionTypeReady                = "Ready"
+	ConditionTypeProgressing          = "Progressing"
+	ConditionTypeDiskReady            = "DiskReady"
+	ConditionTypeIngressReady         = "IngressReady"
+	ConditionTypeHPAActive            = "HPAActive"
+	ConditionTypeExternalSecretsReady = "ExternalSecretsReady"
+	ConditionTypeMonitoringReady      = "MonitoringReady"
 )
 
 // AppDefinitionStatus reports the observed application state. Set by the operator.
@@ -416,7 +418,7 @@ type AppDefinitionStatus struct {
 	Replicas int32 `json:"replicas,omitempty"`
 	// ObservedGeneration is the last spec generation reconciled.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-	// Conditions report Ready, DiskReady, IngressReady, and HPAActive status.
+	// Conditions report workload readiness and optional integration availability.
 	// +patchMergeKey=type
 	// +patchStrategy=merge
 	// +listType=map

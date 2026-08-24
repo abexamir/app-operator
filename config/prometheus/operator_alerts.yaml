@@ -1,0 +1,36 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  labels:
+    app.kubernetes.io/name: appoperator
+    app.kubernetes.io/managed-by: kustomize
+  name: appoperator-alerts
+  namespace: system
+spec:
+  groups:
+    - name: appoperator.rules
+      rules:
+        - alert: AppOperatorReconcileStepErrors
+          expr: sum by (step) (increase(appoperator_reconcile_step_errors_total[10m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: App Operator reconciliation step is failing
+            description: "The {{ $labels.step }} reconciliation step has failed during the last 10 minutes."
+        - alert: AppDefinitionNotReady
+          expr: max_over_time(appoperator_app_ready[10m]) == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: AppDefinition has remained unavailable
+            description: "AppDefinition {{ $labels.namespace }}/{{ $labels.name }} has not been ready for at least 10 minutes."
+        - alert: AppOperatorAPIServerErrors
+          expr: sum(rate(appoperator_apiserver_http_requests_total{status=~"5.."}[5m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: App Operator API server is returning errors
+            description: The App Operator API server has returned 5xx responses for five minutes.

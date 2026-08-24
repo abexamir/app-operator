@@ -33,6 +33,7 @@ func (r *AppDefinitionReconciler) reconcileIngress(ctx context.Context, appDef *
 		if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("deleting stale Ingress: %w", err)
 		}
+		recordManagedResourcePrune("Ingress")
 		return nil
 	}
 

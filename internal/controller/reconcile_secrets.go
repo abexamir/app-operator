@@ -67,6 +67,7 @@ func (r *AppDefinitionReconciler) reconcileSecrets(ctx context.Context, appDef *
 		if err := r.Delete(ctx, obj); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("deleting stale Secret %s: %w", obj.Name, err)
 		}
+		recordManagedResourcePrune("Secret")
 	}
 	return nil
 }

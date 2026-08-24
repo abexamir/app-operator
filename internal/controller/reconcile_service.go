@@ -53,6 +53,7 @@ func (r *AppDefinitionReconciler) reconcileService(ctx context.Context, appDef *
 		if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("deleting stale Service: %w", err)
 		}
+		recordManagedResourcePrune("Service")
 		return nil
 	}
 

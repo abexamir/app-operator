@@ -13,6 +13,10 @@ spec:
       app.kubernetes.io/name: app-operator-apiserver
   template:
     metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8080"
       labels:
         app.kubernetes.io/name: app-operator-apiserver
         app.kubernetes.io/component: apiserver

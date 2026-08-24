@@ -210,6 +210,7 @@ func (r *AppDefinitionReconciler) pruneExternalSecrets(
 		if err := r.Delete(ctx, obj); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("deleting stale ExternalSecret %s: %w", obj.GetName(), err)
 		}
+		recordManagedResourcePrune("ExternalSecret")
 	}
 	return nil
 }

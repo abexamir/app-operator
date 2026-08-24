@@ -273,6 +273,34 @@ var _ = Describe("AppDefinition Controller", func() {
 
 			Expect(k8sClient.Get(ctx, esName, deployment)).To(Succeed())
 			Expect(deployment.Spec.Template.Annotations[externalSecretHashAnnotation]).NotTo(Equal(firstHash))
+			Expect(k8sClient.Get(ctx, esName, app)).To(Succeed())
+			esCondition := apimeta.FindStatusCondition(app.Status.Conditions, appdefinitionv1.ConditionTypeExternalSecretsReady)
+			Expect(esCondition).NotTo(BeNil())
+			Expect(esCondition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(esCondition.Reason).To(Equal("CRDUnavailable"))
+		})
+
+		It("should expose an unavailable monitoring integration in status", func() {
+			metricsName := types.NamespacedName{Name: "metrics-status-test", Namespace: namespace}
+			app := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: metricsName.Name, Namespace: namespace},
+				Spec: appdefinitionv1.AppDefinitionSpec{Containers: []appdefinitionv1.ContainerSpec{{
+					Name: "web", Image: "nginx:latest", Ports: []appdefinitionv1.PortSpec{{
+						Name: "metrics", ContainerPort: 9090, ServicePort: 9090,
+						Metrics: &appdefinitionv1.MetricsSpec{Enabled: true},
+					}},
+				}}},
+			}
+			Expect(k8sClient.Create(ctx, app)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, app) })
+
+			r := newTestReconciler()
+			reconcileTwice(r, metricsName)
+			Expect(k8sClient.Get(ctx, metricsName, app)).To(Succeed())
+			condition := apimeta.FindStatusCondition(app.Status.Conditions, appdefinitionv1.ConditionTypeMonitoringReady)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal("CRDUnavailable"))
 		})
 
 		It("should prune stale managed resources and conditions while preserving unowned resources", func() {

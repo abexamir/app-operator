@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    app.kubernetes.io/name: appoperator
+    app.kubernetes.io/managed-by: kustomize
+  name: apiserver-metrics-monitor
+  namespace: system
+spec:
+  endpoints:
+    - path: /metrics
+      port: http
+      scheme: http
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: app-operator-apiserver
+      app.kubernetes.io/component: apiserver

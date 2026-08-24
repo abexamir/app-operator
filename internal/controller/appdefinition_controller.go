@@ -56,6 +56,9 @@ func (r *AppDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	appDef := &v1.AppDefinition{}
 	if err := r.Get(ctx, req.NamespacedName, appDef); err != nil {
+		if client.IgnoreNotFound(err) == nil {
+			forgetAppMetrics(req.Namespace, req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -113,36 +116,36 @@ func (r *AppDefinitionReconciler) reconcileAll(ctx context.Context, appDef *v1.A
 		return nil
 	}
 
-	if err := r.reconcileConfigMaps(ctx, appDef); err != nil {
+	if err := observeReconcileStep("configmaps", func() error { return r.reconcileConfigMaps(ctx, appDef) }); err != nil {
 		return err
 	}
-	if err := r.reconcileSecrets(ctx, appDef); err != nil {
+	if err := observeReconcileStep("secrets", func() error { return r.reconcileSecrets(ctx, appDef) }); err != nil {
 		return err
 	}
-	if err := r.reconcileDefaultSecretStore(ctx, appDef); err != nil {
+	if err := observeReconcileStep("default_secret_store", func() error { return r.reconcileDefaultSecretStore(ctx, appDef) }); err != nil {
 		return err
 	}
-	if err := r.reconcileExternalSecrets(ctx, appDef); err != nil {
+	if err := observeReconcileStep("external_secrets", func() error { return r.reconcileExternalSecrets(ctx, appDef) }); err != nil {
 		return err
 	}
-	if err := r.reconcileDeployment(ctx, appDef); err != nil {
+	if err := observeReconcileStep("deployment", func() error { return r.reconcileDeployment(ctx, appDef) }); err != nil {
 		return err
 	}
-	if err := r.reconcileService(ctx, appDef); err != nil {
+	if err := observeReconcileStep("service", func() error { return r.reconcileService(ctx, appDef) }); err != nil {
 		return err
 	}
 	if appDef.Spec.Disk != nil {
-		if err := r.reconcilePVC(ctx, appDef); err != nil {
+		if err := observeReconcileStep("pvc", func() error { return r.reconcilePVC(ctx, appDef) }); err != nil {
 			return err
 		}
 	}
-	if err := r.reconcileIngress(ctx, appDef); err != nil {
+	if err := observeReconcileStep("ingress", func() error { return r.reconcileIngress(ctx, appDef) }); err != nil {
 		return err
 	}
-	if err := r.reconcileHPA(ctx, appDef); err != nil {
+	if err := observeReconcileStep("hpa", func() error { return r.reconcileHPA(ctx, appDef) }); err != nil {
 		return err
 	}
-	return r.reconcileServiceMonitor(ctx, appDef)
+	return observeReconcileStep("service_monitor", func() error { return r.reconcileServiceMonitor(ctx, appDef) })
 }
 
 func (r *AppDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {

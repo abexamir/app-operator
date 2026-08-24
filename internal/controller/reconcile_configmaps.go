@@ -54,6 +54,7 @@ func (r *AppDefinitionReconciler) reconcileConfigMaps(ctx context.Context, appDe
 		if err := r.Delete(ctx, obj); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("deleting stale ConfigMap %s: %w", obj.Name, err)
 		}
+		recordManagedResourcePrune("ConfigMap")
 	}
 	return nil
 }

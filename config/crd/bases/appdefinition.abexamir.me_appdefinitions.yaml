@@ -2495,8 +2495,8 @@ spec:
             description: Status reports the observed application state.
             properties:
               conditions:
-                description: Conditions report Ready, DiskReady, IngressReady, and
-                  HPAActive status.
+                description: Conditions report workload readiness and optional integration
+                  availability.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

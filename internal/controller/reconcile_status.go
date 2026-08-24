@@ -12,6 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -187,8 +188,83 @@ func (r *AppDefinitionReconciler) updateStatusOnce(ctx context.Context, appDef *
 		apimeta.RemoveStatusCondition(&fresh.Status.Conditions, v1.ConditionTypeHPAActive)
 	}
 
+	r.updateExternalSecretsStatus(ctx, fresh, now)
+	r.updateMonitoringStatus(ctx, fresh, now)
+
 	if err := r.Status().Update(ctx, fresh); err != nil {
 		return fmt.Errorf("failed to update AppDefinition status: %w", err)
 	}
+	recordAppStatus(fresh.Namespace, fresh.Name, ready == metav1.ConditionTrue, fresh.Generation)
 	return nil
+}
+
+func (r *AppDefinitionReconciler) updateExternalSecretsStatus(ctx context.Context, appDef *v1.AppDefinition, now metav1.Time) {
+	if len(appDef.Spec.ExternalSecrets) == 0 {
+		apimeta.RemoveStatusCondition(&appDef.Status.Conditions, v1.ConditionTypeExternalSecretsReady)
+		return
+	}
+
+	condition := metav1.Condition{
+		Type: v1.ConditionTypeExternalSecretsReady, Status: metav1.ConditionFalse,
+		Reason: "CRDUnavailable", Message: "ExternalSecret CRD is not installed",
+		LastTransitionTime: now, ObservedGeneration: appDef.Generation,
+	}
+	gvk, err := resolveExternalSecretGVK(r.RESTMapper())
+	if err == nil {
+		condition.Reason = "ResourcesPending"
+		condition.Message = "ExternalSecret resources are being created"
+		ready := 0
+		for _, spec := range appDef.Spec.ExternalSecrets {
+			obj := &unstructured.Unstructured{}
+			obj.SetGroupVersionKind(gvk)
+			key := types.NamespacedName{Name: appDef.Name + "-" + spec.Name, Namespace: appDef.Namespace}
+			if getErr := r.APIReader.Get(ctx, key, obj); getErr == nil {
+				ready++
+			}
+		}
+		if ready == len(appDef.Spec.ExternalSecrets) {
+			condition.Status = metav1.ConditionTrue
+			condition.Reason = "ResourcesCreated"
+			condition.Message = fmt.Sprintf("%d ExternalSecret resources created", ready)
+		} else {
+			condition.Message = fmt.Sprintf("%d/%d ExternalSecret resources created", ready, len(appDef.Spec.ExternalSecrets))
+		}
+	} else if !apimeta.IsNoMatchError(err) {
+		condition.Status = metav1.ConditionUnknown
+		condition.Reason = "DiscoveryFailed"
+		condition.Message = err.Error()
+	}
+	apimeta.SetStatusCondition(&appDef.Status.Conditions, condition)
+}
+
+func (r *AppDefinitionReconciler) updateMonitoringStatus(ctx context.Context, appDef *v1.AppDefinition, now metav1.Time) {
+	if len(buildSMEndpoints(appDef)) == 0 {
+		apimeta.RemoveStatusCondition(&appDef.Status.Conditions, v1.ConditionTypeMonitoringReady)
+		return
+	}
+
+	condition := metav1.Condition{
+		Type: v1.ConditionTypeMonitoringReady, Status: metav1.ConditionFalse,
+		Reason: "CRDUnavailable", Message: "ServiceMonitor CRD is not installed",
+		LastTransitionTime: now, ObservedGeneration: appDef.Generation,
+	}
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(serviceMonitorGVK)
+	key := types.NamespacedName{Name: serviceMonitorName(appDef.Name), Namespace: appDef.Namespace}
+	err := r.APIReader.Get(ctx, key, obj)
+	switch {
+	case err == nil:
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = "ResourceCreated"
+		condition.Message = "ServiceMonitor resource created"
+	case apimeta.IsNoMatchError(err):
+	case apierrors.IsNotFound(err):
+		condition.Reason = "ResourcePending"
+		condition.Message = "ServiceMonitor resource is being created"
+	default:
+		condition.Status = metav1.ConditionUnknown
+		condition.Reason = "ReadFailed"
+		condition.Message = err.Error()
+	}
+	apimeta.SetStatusCondition(&appDef.Status.Conditions, condition)
 }
