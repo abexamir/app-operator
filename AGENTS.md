@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Commands
 
@@ -133,5 +133,5 @@ defaults).
 affects the spec surface or the resources produced, make the matching change in
 [app-chart](https://github.com/abexamir/app-chart) in the same session/PR** — new/removed
 fields, new defaults, new CEL validation rules, and changed resource-building logic all need
-a counterpart there. See that repo's `CLAUDE.md` for the reverse-direction mapping table and
+a counterpart there. See that repo's `AGENTS.md` for the reverse-direction mapping table and
 its own conventions.

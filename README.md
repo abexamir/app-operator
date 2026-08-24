@@ -492,6 +492,14 @@ kubectl apply -f config/samples/appdefinition_v1_web_app.yaml
 
 ---
 
+## Companion Helm chart
+
+[app-chart](https://github.com/abexamir/app-chart) is a plain Helm chart with 1:1 field
+parity to `AppDefinitionSpec` — same `values.yaml` shape, no controller/CRD required. Use it
+for GitOps-native deployment instead of running the operator.
+
+---
+
 ## Development
 
 See [docs/development.md](docs/development.md) for architecture, local setup, testing, known limitations, and planned improvements.
