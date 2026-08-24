@@ -83,15 +83,16 @@ spec:
             port: 8081
           initialDelaySeconds: 5
           periodSeconds: 10
-        # TODO(user): Configure the resources accordingly based on the project requirements.
-        # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+        # Manager caches informers for every AppDefinition and every resource kind it reconciles
+        # cluster-wide (Deployments, Services, ExternalSecrets, ...) — 128Mi (the kubebuilder
+        # scaffold default) OOMKills under real cluster load; 1Gi is the proven-stable limit.
         resources:
           limits:
-            cpu: 500m
-            memory: 128Mi
+            cpu: "1"
+            memory: 1Gi
           requests:
-            cpu: 10m
-            memory: 64Mi
+            cpu: 500m
+            memory: 512Mi
         volumeMounts: []
       volumes: []
       serviceAccountName: controller-manager

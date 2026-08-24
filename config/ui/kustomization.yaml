@@ -5,5 +5,5 @@ resources:
 - service.yaml
 images:
 - name: ui
-  newName: ui
-  newTag: 20260629211543-588af8f
+  newName: ghcr.io/abexamir/app-operator-ui
+  newTag: latest
