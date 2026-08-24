@@ -1,3 +1,14 @@
 # More info: https://docs.docker.com/engine/reference/builder/#dockerignore-file
 # Ignore build and test binaries.
 bin/
+apiserver
+*.out
+
+# Local and source-control state is not needed by any image build.
+.git/
+.github/
+.devcontainer/
+.idea/
+.vscode/
+ui/dist/
+ui/node_modules/
