@@ -23,7 +23,9 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -271,6 +273,66 @@ var _ = Describe("AppDefinition Controller", func() {
 
 			Expect(k8sClient.Get(ctx, esName, deployment)).To(Succeed())
 			Expect(deployment.Spec.Template.Annotations[externalSecretHashAnnotation]).NotTo(Equal(firstHash))
+		})
+
+		It("should prune stale managed resources and conditions while preserving unowned resources", func() {
+			pruneName := types.NamespacedName{Name: "prune-test", Namespace: namespace}
+			app := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: pruneName.Name, Namespace: namespace},
+				Spec: appdefinitionv1.AppDefinitionSpec{
+					Containers: []appdefinitionv1.ContainerSpec{{
+						Name:  "web",
+						Image: "nginx:latest",
+						Ports: []appdefinitionv1.PortSpec{{
+							Name: "http", ContainerPort: 80, ServicePort: 80, Protocol: "TCP", Expose: true,
+						}},
+					}},
+					Domains: []appdefinitionv1.DomainSpec{{Name: "prune.example.com", Path: "/", PortName: "http"}},
+					ConfigMaps: []appdefinitionv1.ConfigMapMount{{
+						Name: "settings", MountPath: "/etc/settings", Data: map[string]string{"mode": "test"},
+					}},
+					Secrets: []appdefinitionv1.SecretMount{{
+						Name: "credentials", MountPath: "/etc/credentials", Data: map[string]string{"token": "test"},
+					}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, app)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, app) })
+
+			unowned := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "prune-test-external", Namespace: namespace, Labels: standardLabels(pruneName.Name),
+				},
+				Data: map[string][]byte{"token": []byte("external")},
+			}
+			Expect(k8sClient.Create(ctx, unowned)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, unowned) })
+
+			r := newTestReconciler()
+			reconcileTwice(r, pruneName)
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "prune-test-settings", Namespace: namespace}, &corev1.ConfigMap{})).To(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "prune-test-credentials", Namespace: namespace}, &corev1.Secret{})).To(Succeed())
+			Expect(k8sClient.Get(ctx, pruneName, &networkingv1.Ingress{})).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, pruneName, app)).To(Succeed())
+			app.Spec.ConfigMaps = nil
+			app.Spec.Secrets = nil
+			app.Spec.Domains = nil
+			Expect(k8sClient.Update(ctx, app)).To(Succeed())
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: pruneName})
+			Expect(err).NotTo(HaveOccurred())
+
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: "prune-test-settings", Namespace: namespace}, &corev1.ConfigMap{})
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: "prune-test-credentials", Namespace: namespace}, &corev1.Secret{})
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+			err = k8sClient.Get(ctx, pruneName, &networkingv1.Ingress{})
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: unowned.Name, Namespace: namespace}, unowned)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, pruneName, app)).To(Succeed())
+			Expect(apimeta.FindStatusCondition(app.Status.Conditions, appdefinitionv1.ConditionTypeIngressReady)).To(BeNil())
 		})
 
 		It("should add a finalizer on the first reconcile", func() {

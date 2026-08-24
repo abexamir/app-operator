@@ -124,6 +124,8 @@ func (r *AppDefinitionReconciler) updateStatusOnce(ctx context.Context, appDef *
 			LastTransitionTime: now,
 			ObservedGeneration: fresh.Generation,
 		})
+	} else {
+		apimeta.RemoveStatusCondition(&fresh.Status.Conditions, v1.ConditionTypeDiskReady)
 	}
 
 	// IngressReady: set when domains are declared; reflects whether the ingress controller
@@ -156,6 +158,8 @@ func (r *AppDefinitionReconciler) updateStatusOnce(ctx context.Context, appDef *
 			LastTransitionTime: now,
 			ObservedGeneration: fresh.Generation,
 		})
+	} else {
+		apimeta.RemoveStatusCondition(&fresh.Status.Conditions, v1.ConditionTypeIngressReady)
 	}
 
 	// HPAActive: set when autoscaling is enabled; reflects whether the HPA is operating.
@@ -179,6 +183,8 @@ func (r *AppDefinitionReconciler) updateStatusOnce(ctx context.Context, appDef *
 			LastTransitionTime: now,
 			ObservedGeneration: fresh.Generation,
 		})
+	} else {
+		apimeta.RemoveStatusCondition(&fresh.Status.Conditions, v1.ConditionTypeHPAActive)
 	}
 
 	if err := r.Status().Update(ctx, fresh); err != nil {

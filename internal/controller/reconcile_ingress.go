@@ -5,7 +5,9 @@ import (
 	"fmt"
 
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -15,6 +17,24 @@ import (
 
 func (r *AppDefinitionReconciler) reconcileIngress(ctx context.Context, appDef *v1.AppDefinition) error {
 	logger := log.FromContext(ctx)
+	if len(appDef.Spec.Domains) == 0 {
+		existing := &networkingv1.Ingress{}
+		key := types.NamespacedName{Name: appDef.Name, Namespace: appDef.Namespace}
+		if err := r.Get(ctx, key, existing); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return fmt.Errorf("checking for stale Ingress: %w", err)
+		}
+		if !metav1.IsControlledBy(existing, appDef) {
+			return nil
+		}
+		logger.Info("deleting stale Ingress", "name", existing.Name)
+		if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("deleting stale Ingress: %w", err)
+		}
+		return nil
+	}
 
 	ingress := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{

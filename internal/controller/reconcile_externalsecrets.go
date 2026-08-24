@@ -6,11 +6,13 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1 "github.com/abexamir/app-operator/api/v1"
@@ -46,9 +48,6 @@ func resolveExternalSecretGVK(mapper apimeta.RESTMapper) (schema.GroupVersionKin
 // The function is a no-op when the external-secrets.io CRDs are not installed — the
 // same graceful-skip pattern used for ServiceMonitor.
 func (r *AppDefinitionReconciler) reconcileExternalSecrets(ctx context.Context, appDef *v1.AppDefinition) error {
-	if len(appDef.Spec.ExternalSecrets) == 0 {
-		return nil
-	}
 	logger := log.FromContext(ctx)
 
 	externalSecretGVK, err := resolveExternalSecretGVK(r.RESTMapper())
@@ -60,8 +59,10 @@ func (r *AppDefinitionReconciler) reconcileExternalSecrets(ctx context.Context, 
 		return fmt.Errorf("resolving ExternalSecret API version: %w", err)
 	}
 
+	desiredNames := make(map[string]struct{}, len(appDef.Spec.ExternalSecrets))
 	for _, es := range appDef.Spec.ExternalSecrets {
 		name := appDef.Name + "-" + es.Name
+		desiredNames[name] = struct{}{}
 
 		storeKind := es.StoreKind
 		if storeKind == "" {
@@ -172,6 +173,43 @@ func (r *AppDefinitionReconciler) reconcileExternalSecrets(ctx context.Context, 
 			return fmt.Errorf("updating ExternalSecret %s: %w", name, err)
 		}
 		logger.Info("updating ExternalSecret", "name", name)
+	}
+
+	return r.pruneExternalSecrets(ctx, appDef, externalSecretGVK, desiredNames)
+}
+
+func (r *AppDefinitionReconciler) pruneExternalSecrets(
+	ctx context.Context,
+	appDef *v1.AppDefinition,
+	gvk schema.GroupVersionKind,
+	desiredNames map[string]struct{},
+) error {
+	logger := log.FromContext(ctx)
+	list := &unstructured.UnstructuredList{}
+	list.SetAPIVersion(gvk.GroupVersion().String())
+	list.SetKind(gvk.Kind + "List")
+	if err := r.APIReader.List(ctx, list,
+		client.InNamespace(appDef.Namespace),
+		client.MatchingLabels(standardLabels(appDef.Name)),
+	); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("listing managed ExternalSecrets for pruning: %w", err)
+	}
+
+	for i := range list.Items {
+		obj := &list.Items[i]
+		if !metav1.IsControlledBy(obj, appDef) {
+			continue
+		}
+		if _, keep := desiredNames[obj.GetName()]; keep {
+			continue
+		}
+		logger.Info("deleting stale ExternalSecret", "name", obj.GetName())
+		if err := r.Delete(ctx, obj); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("deleting stale ExternalSecret %s: %w", obj.GetName(), err)
+		}
 	}
 	return nil
 }

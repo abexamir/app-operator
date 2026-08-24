@@ -136,10 +136,8 @@ func (r *AppDefinitionReconciler) reconcileAll(ctx context.Context, appDef *v1.A
 			return err
 		}
 	}
-	if len(appDef.Spec.Domains) > 0 {
-		if err := r.reconcileIngress(ctx, appDef); err != nil {
-			return err
-		}
+	if err := r.reconcileIngress(ctx, appDef); err != nil {
+		return err
 	}
 	if err := r.reconcileHPA(ctx, appDef); err != nil {
 		return err
