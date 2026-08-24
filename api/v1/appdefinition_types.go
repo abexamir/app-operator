@@ -229,8 +229,8 @@ type ExternalSecretMount struct {
 	// +kubebuilder:default=ClusterSecretStore
 	// +kubebuilder:validation:Enum=SecretStore;ClusterSecretStore
 	StoreKind string `json:"storeKind,omitempty"`
-	// RefreshInterval is how often ESO re-reads the store. Defaults to 1h.
-	// +kubebuilder:default="1h"
+	// RefreshInterval is how often ESO re-reads the store. Defaults to 1m.
+	// +kubebuilder:default="1m"
 	RefreshInterval string `json:"refreshInterval,omitempty"`
 	// MountPath mounts the synced Secret as files in all containers.
 	MountPath string `json:"mountPath,omitempty"`

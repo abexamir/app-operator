@@ -79,6 +79,8 @@ All resources use `ctrl.CreateOrUpdate` — the loop is fully idempotent. A 30-s
 
 **Config hash rollout**: when inline `configMaps[].data` or `secrets[].data` changes, a SHA-256 hash is stored in pod template annotation `appdefinition.abexamir.me/config-hash`, triggering a rolling restart automatically.
 
+**External-secret rollout**: the Secret ESO syncs from each `spec.externalSecrets` entry is hashed into pod template annotation `appdefinition.abexamir.me/external-secret-hash`, so a Vault rotation triggers a rolling restart without manual intervention. The target Secret is owned by the ExternalSecret, not the AppDefinition, so it's picked up via a label-based `Secret` watch (`mapManagedSecretToAppDefinition` in `appdefinition_controller.go`) rather than `Owns`. Propagation latency is bounded by `spec.externalSecrets[].refreshInterval` (default `1m`) — raise it per-entry to cut polling load on the store for secrets that change rarely.
+
 **Stateful apps** (`spec.disk` set): forced to `Recreate` strategy, max 1 replica, HPA disabled. These constraints are also enforced by CRD CEL validation rules — no admission webhook needed.
 
 **Lifecycle hooks**: applied to `containers[0]` only. Sidecars are skipped to avoid exec-hook crash loops.

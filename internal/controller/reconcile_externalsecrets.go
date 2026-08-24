@@ -69,7 +69,7 @@ func (r *AppDefinitionReconciler) reconcileExternalSecrets(ctx context.Context, 
 		}
 		refreshInterval := es.RefreshInterval
 		if refreshInterval == "" {
-			refreshInterval = "1h"
+			refreshInterval = "1m"
 		}
 
 		// Build the data array.
@@ -118,6 +118,15 @@ func (r *AppDefinitionReconciler) reconcileExternalSecrets(ctx context.Context, 
 					"target": map[string]interface{}{
 						"name":           name,
 						"creationPolicy": "Owner",
+						// Labels the synced Secret with our standard labels so the
+						// controller's label-based Secret watch (see SetupWithManager)
+						// picks it up — this Secret is owned by the ExternalSecret, not
+						// the AppDefinition, so it falls outside any owner-based watch.
+						"template": map[string]interface{}{
+							"metadata": map[string]interface{}{
+								"labels": labelsToInterface(standardLabels(appDef.Name)),
+							},
+						},
 					},
 					"data":     data,
 					"dataFrom": dataFrom,

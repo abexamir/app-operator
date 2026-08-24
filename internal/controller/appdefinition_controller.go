@@ -10,11 +10,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1 "github.com/abexamir/app-operator/api/v1"
 )
@@ -150,9 +153,32 @@ func (r *AppDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
-		Owns(&corev1.Secret{}).
 		Owns(&networkingv1.Ingress{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
+		// Label-based rather than Owns(&corev1.Secret{}): inline-managed Secrets carry our
+		// standard labels and are owned directly, but ExternalSecret-produced Secrets are
+		// owned by the ExternalSecret (ESO's creationPolicy: Owner sets that reference, not
+		// this controller), so an owner-based watch would silently miss them. This is what
+		// lets ESO syncing a new secret version trigger a Deployment rollout — see
+		// externalSecretHash in reconcile_deployment.go — instead of requiring a manual
+		// restart or waiting on an unrelated trigger.
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapManagedSecretToAppDefinition)).
 		Complete(r)
+}
+
+// mapManagedSecretToAppDefinition enqueues a reconcile of the AppDefinition named by a
+// Secret's app.kubernetes.io/instance label, for any Secret carrying this operator's
+// standard "managed-by" label (set on both inline-managed Secrets and ExternalSecret
+// target Secrets — see standardLabels and reconcile_externalsecrets.go).
+func mapManagedSecretToAppDefinition(_ context.Context, obj client.Object) []reconcile.Request {
+	labels := obj.GetLabels()
+	if labels["app.kubernetes.io/managed-by"] != "app-operator" {
+		return nil
+	}
+	name := labels["app.kubernetes.io/instance"]
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: name, Namespace: obj.GetNamespace()}}}
 }

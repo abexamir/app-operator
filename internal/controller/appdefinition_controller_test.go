@@ -221,6 +221,58 @@ var _ = Describe("AppDefinition Controller", func() {
 			Expect(deployment.OwnerReferences[0].Name).To(Equal(resourceName))
 		})
 
+		It("should trigger a rollout when a synced ExternalSecret Secret changes", func() {
+			// The external-secrets.io CRD isn't installed in this envtest, so
+			// reconcileExternalSecrets no-ops. Create the Secret ESO would otherwise
+			// produce directly, to exercise the hash-based rollout trigger in isolation.
+			esName := types.NamespacedName{Name: "es-rollout-test", Namespace: namespace}
+			app := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: esName.Name, Namespace: namespace},
+				Spec: appdefinitionv1.AppDefinitionSpec{
+					Containers: []appdefinitionv1.ContainerSpec{
+						{Name: "web", Image: "nginx:latest"},
+					},
+					ExternalSecrets: []appdefinitionv1.ExternalSecretMount{
+						{
+							Name:  "creds",
+							Store: "vault-store",
+							Data: []appdefinitionv1.ExternalSecretData{
+								{SecretKey: "password", RemoteRef: appdefinitionv1.ExternalSecretRemoteRef{Key: "secret/data/x"}},
+							},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, app)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, app) })
+
+			syncedSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: esName.Name + "-creds", Namespace: namespace},
+				Data:       map[string][]byte{"password": []byte("v1")},
+			}
+			Expect(k8sClient.Create(ctx, syncedSecret)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, syncedSecret) })
+
+			r := newTestReconciler()
+			reconcileTwice(r, esName)
+
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, esName, deployment)).To(Succeed())
+			firstHash := deployment.Spec.Template.Annotations[externalSecretHashAnnotation]
+			Expect(firstHash).NotTo(BeEmpty())
+
+			// Simulate ESO syncing a new secret version from the backing store.
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: syncedSecret.Name, Namespace: namespace}, syncedSecret)).To(Succeed())
+			syncedSecret.Data = map[string][]byte{"password": []byte("v2")}
+			Expect(k8sClient.Update(ctx, syncedSecret)).To(Succeed())
+
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: esName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, esName, deployment)).To(Succeed())
+			Expect(deployment.Spec.Template.Annotations[externalSecretHashAnnotation]).NotTo(Equal(firstHash))
+		})
+
 		It("should add a finalizer on the first reconcile", func() {
 			r := newTestReconciler()
 			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})

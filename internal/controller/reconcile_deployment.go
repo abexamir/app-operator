@@ -9,7 +9,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -19,12 +21,21 @@ import (
 )
 
 const configHashAnnotation = "appdefinition.abexamir.me/config-hash"
+const externalSecretHashAnnotation = "appdefinition.abexamir.me/external-secret-hash"
 
 func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDef *v1.AppDefinition) error {
 	logger := log.FromContext(ctx)
 
+	// Read the Secrets ESO has already synced so a rollout can be triggered below.
+	// Read before the retry loop: it's independent of the CreateOrUpdate conflict/retry
+	// cycle and only needs to happen once per reconcile.
+	esHash, err := r.externalSecretHash(ctx, appDef)
+	if err != nil {
+		return fmt.Errorf("computing external secret hash: %w", err)
+	}
+
 	var op controllerutil.OperationResult
-	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		deployment := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      appDef.Name,
@@ -48,7 +59,7 @@ func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDe
 				}
 			}
 			deployment.Spec.Template.Labels = selectorLabels(appDef.Name)
-			deployment.Spec.Template.Annotations = podTemplateAnnotations(appDef)
+			deployment.Spec.Template.Annotations = podTemplateAnnotations(appDef, esHash)
 
 			// Surgical pod spec update: only touch fields the operator owns.
 			// Preserving the existing PodSpec keeps Kubernetes-injected defaults
@@ -87,13 +98,77 @@ func deploymentStrategy(appDef *v1.AppDefinition) appsv1.DeploymentStrategy {
 }
 
 // podTemplateAnnotations returns annotations for the pod template.
-// The config hash annotation triggers a rolling restart when inline ConfigMap or Secret data changes.
-func podTemplateAnnotations(appDef *v1.AppDefinition) map[string]string {
+// The config hash annotation triggers a rolling restart when inline ConfigMap or Secret data
+// changes; the external-secret hash does the same when ESO syncs a new value from the backing
+// store (Vault, etc.) into a Secret this AppDefinition references.
+func podTemplateAnnotations(appDef *v1.AppDefinition, externalSecretHash string) map[string]string {
 	hash := computeConfigHash(appDef)
-	if hash == "" {
+	if hash == "" && externalSecretHash == "" {
 		return nil
 	}
-	return map[string]string{configHashAnnotation: hash}
+	annotations := make(map[string]string, 2)
+	if hash != "" {
+		annotations[configHashAnnotation] = hash
+	}
+	if externalSecretHash != "" {
+		annotations[externalSecretHashAnnotation] = externalSecretHash
+	}
+	return annotations
+}
+
+// externalSecretHash hashes the current .data of every Secret that spec.externalSecrets
+// produces (name "<app>-<es.name>"), so that changing the annotation on the pod template
+// forces a rolling restart whenever ESO syncs a new value from the backing store — without
+// this, a Vault rotation updates the Secret object but pods keep running with the stale
+// value (env vars are snapshotted at container start; volume-mounted files update in place
+// but most apps don't hot-reload them) until someone manually restarts the Deployment.
+//
+// Reads via r.APIReader (bypasses the informer cache) for consistency with the existence
+// checks in reconcile_externalsecrets.go. The reconcile that observes a synced Secret is
+// triggered by the label-based Secret watch in SetupWithManager, since ESO sets the target
+// Secret's owner reference to the ExternalSecret rather than the AppDefinition.
+func (r *AppDefinitionReconciler) externalSecretHash(ctx context.Context, appDef *v1.AppDefinition) (string, error) {
+	if len(appDef.Spec.ExternalSecrets) == 0 {
+		return "", nil
+	}
+
+	names := make([]string, len(appDef.Spec.ExternalSecrets))
+	for i, es := range appDef.Spec.ExternalSecrets {
+		names[i] = es.Name
+	}
+	sort.Strings(names)
+
+	h := sha256.New()
+	write := func(s string) { _, _ = io.WriteString(h, s) }
+	found := false
+
+	for _, esName := range names {
+		secret := &corev1.Secret{}
+		key := types.NamespacedName{Name: appDef.Name + "-" + esName, Namespace: appDef.Namespace}
+		if err := r.APIReader.Get(ctx, key, secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				// ESO hasn't synced this one yet; nothing to hash.
+				continue
+			}
+			return "", fmt.Errorf("getting Secret %s: %w", key.Name, err)
+		}
+		found = true
+
+		keys := make([]string, 0, len(secret.Data))
+		for k := range secret.Data {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		write("es:" + esName + "\n")
+		for _, k := range keys {
+			write(k + "=" + string(secret.Data[k]) + "\n")
+		}
+	}
+
+	if !found {
+		return "", nil
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))[:16], nil
 }
 
 // computeConfigHash returns a 16-char hex hash of all inline ConfigMap and Secret data.
