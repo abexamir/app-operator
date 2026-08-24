@@ -15,6 +15,7 @@ import EditIcon from '@mui/icons-material/Edit'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
 import { appdefinitions } from '../api/appdefinitions'
 import { StatusChip } from '../components/StatusChip'
+import { getActiveNamespace } from '../api/client'
 
 function age(ts?: string) {
   if (!ts) return '—'
@@ -28,10 +29,11 @@ function age(ts?: string) {
 export function AppList() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const namespace = getActiveNamespace()
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['appdefinitions'],
-    queryFn: () => appdefinitions.list(),
+    queryFn: () => appdefinitions.listInNamespace(namespace),
     refetchInterval: 10_000,
   })
 
@@ -142,7 +144,7 @@ export function AppList() {
         <Box>
           <Typography variant="h5" gutterBottom>Applications</Typography>
           <Typography variant="body2" color="text.secondary">
-            {rows.length} app{rows.length !== 1 ? 's' : ''} across all namespaces
+            {rows.length} app{rows.length !== 1 ? 's' : ''} in namespace {namespace}
           </Typography>
         </Box>
         <Button variant="contained" startIcon={<AddIcon />} onClick={() => navigate('/new')}>

@@ -17,13 +17,22 @@ import (
 
 const maxRequestBodyBytes = 1 << 20 // 1 MiB
 
+func (s *Server) readiness(w http.ResponseWriter, r *http.Request) {
+	list := &appdefinitionv1.AppDefinitionList{}
+	if err := s.client.List(r.Context(), list, &client.ListOptions{Limit: 1}); err != nil {
+		s.writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 func (s *Server) listAppDefinitions(w http.ResponseWriter, r *http.Request) {
 	list := &appdefinitionv1.AppDefinitionList{}
 	if err := s.client.List(r.Context(), list); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, list)
+	s.writeJSON(w, http.StatusOK, sanitizeAppDefinitionList(list))
 }
 
 func (s *Server) listAppDefinitionsInNamespace(w http.ResponseWriter, r *http.Request) {
@@ -33,7 +42,7 @@ func (s *Server) listAppDefinitionsInNamespace(w http.ResponseWriter, r *http.Re
 		s.writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, list)
+	s.writeJSON(w, http.StatusOK, sanitizeAppDefinitionList(list))
 }
 
 func (s *Server) getAppDefinition(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +54,7 @@ func (s *Server) getAppDefinition(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, httpStatusFor(err), err)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, app)
+	s.writeJSON(w, http.StatusOK, sanitizeAppDefinition(app))
 }
 
 func (s *Server) createAppDefinition(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +63,14 @@ func (s *Server) createAppDefinition(w http.ResponseWriter, r *http.Request) {
 	app := &appdefinitionv1.AppDefinition{}
 	if err := decodeJSONBody(w, r, app); err != nil {
 		s.writeError(w, httpStatusForDecodeError(err), err)
+		return
+	}
+	if err := rejectInlineSecretData(app); err != nil {
+		s.writeError(w, http.StatusUnprocessableEntity, err)
+		return
+	}
+	if err := requireSecretSources(app); err != nil {
+		s.writeError(w, http.StatusUnprocessableEntity, err)
 		return
 	}
 	app.ResourceVersion = ""
@@ -71,7 +88,7 @@ func (s *Server) createAppDefinition(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, httpStatusFor(err), err)
 		return
 	}
-	s.writeJSON(w, http.StatusCreated, app)
+	s.writeJSON(w, http.StatusCreated, sanitizeAppDefinition(app))
 }
 
 func (s *Server) updateAppDefinition(w http.ResponseWriter, r *http.Request) {
@@ -105,13 +122,73 @@ func (s *Server) updateAppDefinition(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusConflict, errors.New("resource was modified; refresh and retry"))
 		return
 	}
+	if err := rejectInlineSecretData(update); err != nil {
+		s.writeError(w, http.StatusUnprocessableEntity, err)
+		return
+	}
+	preserveInlineSecretData(existing, update)
+	if err := requireSecretSources(update); err != nil {
+		s.writeError(w, http.StatusUnprocessableEntity, err)
+		return
+	}
 	existing.Spec = update.Spec
 
 	if err := s.client.Update(r.Context(), existing); err != nil {
 		s.writeError(w, httpStatusFor(err), err)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, existing)
+	s.writeJSON(w, http.StatusOK, sanitizeAppDefinition(existing))
+}
+
+func rejectInlineSecretData(app *appdefinitionv1.AppDefinition) error {
+	for _, secret := range app.Spec.Secrets {
+		if secret.Data != nil {
+			return fmt.Errorf("secrets[%s].data cannot be submitted through the API; use secretRef or externalSecrets", secret.Name)
+		}
+	}
+	return nil
+}
+
+func requireSecretSources(app *appdefinitionv1.AppDefinition) error {
+	for _, secret := range app.Spec.Secrets {
+		if secret.SecretRef == "" && secret.Data == nil {
+			return fmt.Errorf("secrets[%s] must set secretRef; use externalSecrets for externally managed values", secret.Name)
+		}
+	}
+	return nil
+}
+
+func preserveInlineSecretData(existing, update *appdefinitionv1.AppDefinition) {
+	existingData := make(map[string]map[string]string, len(existing.Spec.Secrets))
+	for _, secret := range existing.Spec.Secrets {
+		if secret.SecretRef == "" && secret.Data != nil {
+			existingData[secret.Name] = secret.Data
+		}
+	}
+	for i := range update.Spec.Secrets {
+		secret := &update.Spec.Secrets[i]
+		if secret.SecretRef == "" && secret.Data == nil {
+			secret.Data = existingData[secret.Name]
+		}
+	}
+}
+
+func sanitizeAppDefinition(app *appdefinitionv1.AppDefinition) *appdefinitionv1.AppDefinition {
+	sanitized := app.DeepCopy()
+	for i := range sanitized.Spec.Secrets {
+		sanitized.Spec.Secrets[i].Data = nil
+	}
+	return sanitized
+}
+
+func sanitizeAppDefinitionList(list *appdefinitionv1.AppDefinitionList) *appdefinitionv1.AppDefinitionList {
+	sanitized := list.DeepCopy()
+	for i := range sanitized.Items {
+		for j := range sanitized.Items[i].Spec.Secrets {
+			sanitized.Items[i].Spec.Secrets[j].Data = nil
+		}
+	}
+	return sanitized
 }
 
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst interface{}) error {
@@ -169,7 +246,13 @@ type errorResponse struct {
 
 func (s *Server) writeError(w http.ResponseWriter, status int, err error) {
 	s.log.Error(err, "request error", "status", status)
-	s.writeJSON(w, status, errorResponse{Error: err.Error()})
+	message := http.StatusText(status)
+	switch status {
+	case http.StatusBadRequest, http.StatusConflict, http.StatusRequestEntityTooLarge,
+		http.StatusUnprocessableEntity, http.StatusPreconditionRequired, http.StatusTooManyRequests:
+		message = err.Error()
+	}
+	s.writeJSON(w, status, errorResponse{Error: message})
 }
 
 func httpStatusFor(err error) int {

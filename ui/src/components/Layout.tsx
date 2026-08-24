@@ -7,8 +7,11 @@ import ListItemIcon from '@mui/material/ListItemIcon'
 import ListItemText from '@mui/material/ListItemText'
 import Typography from '@mui/material/Typography'
 import Divider from '@mui/material/Divider'
+import Button from '@mui/material/Button'
 import AppsIcon from '@mui/icons-material/Apps'
 import HexagonOutlinedIcon from '@mui/icons-material/HexagonOutlined'
+import LogoutIcon from '@mui/icons-material/Logout'
+import { setAccessToken } from '../api/client'
 
 const DRAWER_WIDTH = 220
 
@@ -52,6 +55,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </ListItemButton>
           ))}
         </List>
+        <Box sx={{ mt: 'auto', p: 2 }}>
+          <Button
+            size="small"
+            color="inherit"
+            startIcon={<LogoutIcon />}
+            onClick={() => {
+              setAccessToken('')
+              window.location.reload()
+            }}
+            fullWidth
+          >
+            Sign out
+          </Button>
+        </Box>
       </Drawer>
 
       <Box component="main" sx={{ flexGrow: 1, overflow: 'auto', minHeight: '100vh' }}>

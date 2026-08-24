@@ -101,8 +101,12 @@ Both `ServiceMonitor` (prometheus-operator) and `ExternalSecret` (external-secre
 
 `server.go` builds a chi router with CORS and logging middleware. `handlers.go` contains all CRUD handlers. The server uses a standalone `controller-runtime` client built without a Manager — it connects to the Kubernetes API directly using in-cluster config (or local kubeconfig when run locally).
 
+All `/api/v1` routes require a bearer token. The API server validates it through Kubernetes `TokenReview`, then performs a `SubjectAccessReview` for the exact verb, namespace, and object before using its service-account client. This makes existing Kubernetes RoleBindings the tenant boundary. CORS is deny-by-default and can be enabled for exact origins with `--cors-allowed-origins`; same-origin traffic through the UI nginx proxy needs no CORS entry. Inline secret data is never returned or accepted through the BFF—use `secretRef` or `externalSecrets`.
+
 Routes:
 - `GET /healthz`
+- `GET /readyz` (verifies Kubernetes API connectivity)
+- `GET /metrics`
 - `GET /api/v1/appdefinitions` (all namespaces)
 - `GET|POST /api/v1/namespaces/{namespace}/appdefinitions`
 - `GET|PUT|DELETE /api/v1/namespaces/{namespace}/appdefinitions/{name}`

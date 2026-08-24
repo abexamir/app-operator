@@ -1,8 +1,33 @@
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
+const TOKEN_KEY = 'app-operator-access-token'
+const NAMESPACE_KEY = 'app-operator-active-namespace'
+
+export function getAccessToken() {
+  return sessionStorage.getItem(TOKEN_KEY) ?? ''
+}
+
+export function setAccessToken(token: string) {
+  const trimmed = token.trim()
+  if (trimmed) sessionStorage.setItem(TOKEN_KEY, trimmed)
+  else sessionStorage.removeItem(TOKEN_KEY)
+}
+
+export function getActiveNamespace() {
+  return sessionStorage.getItem(NAMESPACE_KEY) ?? 'default'
+}
+
+export function setActiveNamespace(namespace: string) {
+  sessionStorage.setItem(NAMESPACE_KEY, namespace.trim() || 'default')
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+	const token = getAccessToken()
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+		headers: {
+			'Content-Type': 'application/json',
+			...(token ? { Authorization: `Bearer ${token}` } : {}),
+			...init?.headers,
+		},
     ...init,
   })
   if (!res.ok) {

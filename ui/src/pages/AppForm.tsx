@@ -26,6 +26,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
 import { appdefinitions } from '../api/appdefinitions'
+import { getActiveNamespace } from '../api/client'
 import type { AppDefinition } from '../types/appdefinition'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -82,7 +83,7 @@ interface ContainerForm { name: string; image: string; command: string; args: st
 interface DomainForm { name: string; tls: boolean; redirectTls: boolean; certIssuer: string; path: string; portName: string; secretName: string; annotationsJson: string }
 interface DiskPartitionForm { subPath: string; mountPath: string }
 interface ConfigMapForm { name: string; mountPath: string; dataJson: string }
-interface SecretForm { name: string; mountPath: string; asEnvVars: boolean; secretRef: string; dataJson: string }
+interface SecretForm { name: string; mountPath: string; asEnvVars: boolean; secretRef: string }
 interface ExternalSecretDataRow { secretKey: string; remoteKey: string; remoteProperty: string }
 interface ExternalSecretForm { name: string; store: string; storeKind: string; refreshInterval: string; mountPath: string; asEnvVars: boolean; data: ExternalSecretDataRow[]; dataFromJson: string }
 
@@ -201,7 +202,6 @@ function buildSpec(v: FormValues) {
     secrets: v.secrets.map(s => ({
       name: s.name, mountPath: s.mountPath || undefined, asEnvVars: s.asEnvVars || undefined,
       secretRef: s.secretRef || undefined,
-      data: s.dataJson ? parseJsonOr<Record<string, string> | undefined>(s.dataJson, undefined) : undefined,
     })),
     externalSecrets: v.externalSecrets.map(es => ({
       name: es.name, store: es.store, storeKind: es.storeKind || undefined,
@@ -269,7 +269,7 @@ function appToForm(app: AppDefinition): FormValues {
     autoscalingCpu: s.autoscaling?.targetCPUUtilizationPercentage ?? 70,
     autoscalingMemory: s.autoscaling?.targetMemoryUtilizationPercentage ?? 0,
     configMaps: (s.configMaps ?? []).map(cm => ({ name: cm.name, mountPath: cm.mountPath, dataJson: JSON.stringify(cm.data, null, 2) })),
-    secrets: (s.secrets ?? []).map(sec => ({ name: sec.name, mountPath: sec.mountPath ?? '', asEnvVars: sec.asEnvVars ?? false, secretRef: sec.secretRef ?? '', dataJson: sec.data ? JSON.stringify(sec.data, null, 2) : '' })),
+    secrets: (s.secrets ?? []).map(sec => ({ name: sec.name, mountPath: sec.mountPath ?? '', asEnvVars: sec.asEnvVars ?? false, secretRef: sec.secretRef ?? '' })),
     externalSecrets: (s.externalSecrets ?? []).map(es => ({
       name: es.name, store: es.store, storeKind: es.storeKind ?? 'ClusterSecretStore',
       refreshInterval: es.refreshInterval ?? '1h', mountPath: es.mountPath ?? '',
@@ -382,7 +382,9 @@ export function AppForm() {
   const queryClient = useQueryClient()
   const [tab, setTab] = useState(0)
 
-  const { register, control, handleSubmit, reset, watch, formState: { errors } } = useForm<FormValues>({ defaultValues: defaults })
+  const { register, control, handleSubmit, reset, watch, formState: { errors } } = useForm<FormValues>({
+    defaultValues: { ...defaults, namespace: getActiveNamespace() },
+  })
 
   const { data: existing, isLoading } = useQuery({
     queryKey: ['appdefinitions', namespace, name],
@@ -643,12 +645,10 @@ export function AppForm() {
                       <Controller control={control} name={`secrets.${i}.asEnvVars`}
                         render={({ field }) => <FormControlLabel control={<Switch checked={field.value} onChange={e => field.onChange(e.target.checked)} />} label="Inject as Env Vars" />} />
                     </Row>
-                    <Controller control={control} name={`secrets.${i}.dataJson`}
-                      render={({ field }) => <JsonField label="Inline Data (omit to use secretRef)" value={field.value} onChange={field.onChange} />} />
                   </AccordionDetails>
                 </Accordion>
               ))}
-              <AddBtn label="Add Secret" onClick={() => addSecret({ name: '', mountPath: '', asEnvVars: false, secretRef: '', dataJson: '' })} />
+              <AddBtn label="Add Secret Reference" onClick={() => addSecret({ name: '', mountPath: '', asEnvVars: false, secretRef: '' })} />
 
               <Divider sx={{ my: 3 }} />
               <SectionTitle>External Secrets (ESO)</SectionTitle>
