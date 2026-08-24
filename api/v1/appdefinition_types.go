@@ -9,10 +9,17 @@ import (
 type PortSpec struct {
 	// Name is the port identifier used in the Service, Ingress, and ServiceMonitor.
 	// Must be unique across all containers in the AppDefinition.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=15
+	// +kubebuilder:validation:Pattern=`^[a-z]([-a-z0-9]*[a-z0-9])?$`
 	Name string `json:"name"`
 	// ContainerPort is the port the process listens on inside the container.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
 	ContainerPort int32 `json:"containerPort"`
 	// ServicePort is the port number published on the Kubernetes Service.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
 	ServicePort int32 `json:"servicePort"`
 	// Protocol is the network protocol. Defaults to TCP.
 	// +kubebuilder:default=TCP
@@ -38,14 +45,19 @@ type Probe struct {
 	// Exec runs a command inside the container. Use when type is exec.
 	Exec *corev1.ExecAction `json:"exec,omitempty"`
 	// InitialDelaySeconds waits before the first probe after container start.
+	// +kubebuilder:validation:Minimum=0
 	InitialDelaySeconds int32 `json:"initialDelaySeconds,omitempty"`
 	// PeriodSeconds is the interval between probe attempts.
+	// +kubebuilder:validation:Minimum=1
 	PeriodSeconds int32 `json:"periodSeconds,omitempty"`
 	// TimeoutSeconds is the per-probe timeout.
+	// +kubebuilder:validation:Minimum=1
 	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
 	// FailureThreshold is the number of consecutive failures before marking unhealthy.
+	// +kubebuilder:validation:Minimum=1
 	FailureThreshold int32 `json:"failureThreshold,omitempty"`
 	// SuccessThreshold is the number of consecutive successes before marking healthy.
+	// +kubebuilder:validation:Minimum=1
 	SuccessThreshold int32 `json:"successThreshold,omitempty"`
 }
 
@@ -54,6 +66,7 @@ type DiskPartition struct {
 	// SubPath is the directory within the PVC volume to mount.
 	SubPath string `json:"subPath"`
 	// MountPath is the absolute path inside every container where SubPath is mounted.
+	// +kubebuilder:validation:Pattern=`^/`
 	MountPath string `json:"mountPath"`
 }
 
@@ -136,8 +149,12 @@ type MetricsSpec struct {
 // ContainerSpec defines a main application container in the pod.
 type ContainerSpec struct {
 	// Name is the container name within the pod. Must be unique among all containers.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Name string `json:"name"`
 	// Image is the OCI image reference (registry/repo:tag or digest).
+	// +kubebuilder:validation:MinLength=1
 	Image string `json:"image"`
 	// Command overrides the image ENTRYPOINT.
 	Command []string `json:"command,omitempty"`
@@ -160,8 +177,12 @@ type ContainerSpec struct {
 // but do not expose ports or receive lifecycle hooks.
 type InitContainerSpec struct {
 	// Name is the init container name. Must be unique among all containers.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Name string `json:"name"`
 	// Image is the OCI image reference.
+	// +kubebuilder:validation:MinLength=1
 	Image string `json:"image"`
 	// Command overrides the image ENTRYPOINT.
 	Command []string `json:"command,omitempty"`
@@ -179,13 +200,18 @@ type AutoscalingSpec struct {
 	// Enabled creates or updates an HPA when true. Deletes the HPA when false.
 	Enabled bool `json:"enabled"`
 	// MinReplicas is the HPA floor. Defaults to spec.replicas or 1 when unset.
+	// +kubebuilder:validation:Minimum=1
 	MinReplicas *int32 `json:"minReplicas,omitempty"`
 	// MaxReplicas is the HPA ceiling.
 	// +kubebuilder:validation:Minimum=1
 	MaxReplicas int32 `json:"maxReplicas"`
 	// TargetCPUUtilizationPercentage scales on average CPU utilization across pods.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
 	TargetCPUUtilizationPercentage *int32 `json:"targetCPUUtilizationPercentage,omitempty"`
 	// TargetMemoryUtilizationPercentage scales on average memory utilization across pods.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
 	TargetMemoryUtilizationPercentage *int32 `json:"targetMemoryUtilizationPercentage,omitempty"`
 }
 
@@ -233,6 +259,7 @@ type ExternalSecretMount struct {
 	// +kubebuilder:default="1m"
 	RefreshInterval string `json:"refreshInterval,omitempty"`
 	// MountPath mounts the synced Secret as files in all containers.
+	// +kubebuilder:validation:Pattern=`^/`
 	MountPath string `json:"mountPath,omitempty"`
 	// AsEnvVars injects all synced Secret keys as environment variables in all containers.
 	AsEnvVars bool `json:"asEnvVars,omitempty"`
@@ -248,6 +275,7 @@ type ConfigMapMount struct {
 	// Name identifies this entry. The ConfigMap is named "<app>-<name>".
 	Name string `json:"name"`
 	// MountPath is the directory where ConfigMap keys appear as files in all containers.
+	// +kubebuilder:validation:Pattern=`^/`
 	MountPath string `json:"mountPath"`
 	// Data is the ConfigMap key-value content.
 	Data map[string]string `json:"data"`
@@ -261,6 +289,7 @@ type SecretMount struct {
 	// Name identifies this entry. Inline secrets are named "<app>-<name>".
 	Name string `json:"name"`
 	// MountPath mounts the Secret as files in all containers.
+	// +kubebuilder:validation:Pattern=`^/`
 	MountPath string `json:"mountPath,omitempty"`
 	// AsEnvVars injects all Secret keys as environment variables in all containers.
 	AsEnvVars bool `json:"asEnvVars,omitempty"`
@@ -276,6 +305,8 @@ type SecretMount struct {
 // DomainSpec declares an Ingress host rule and optional TLS.
 type DomainSpec struct {
 	// Name is the DNS hostname (e.g. app.example.com).
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 	// TLS enables HTTPS for this host using a TLS secret.
 	TLS bool `json:"tls"`
@@ -284,6 +315,7 @@ type DomainSpec struct {
 	// CertIssuer is the cert-manager ClusterIssuer or Issuer name for automatic TLS.
 	CertIssuer string `json:"certIssuer,omitempty"`
 	// Path is the URL path prefix routed to the backend. Defaults to /.
+	// +kubebuilder:validation:Pattern=`^/`
 	Path string `json:"path,omitempty"`
 	// Annotations are merged into the Ingress rule metadata.
 	Annotations map[string]string `json:"annotations,omitempty"`
@@ -319,6 +351,7 @@ type AppDefinitionSpec struct {
 	// InitContainers run to completion before main containers start.
 	InitContainers []InitContainerSpec `json:"initContainers,omitempty"`
 	// Replicas is the desired pod count. Defaults to 1. Capped at 1 when disk is set.
+	// +kubebuilder:validation:Minimum=0
 	Replicas *int32 `json:"replicas,omitempty"`
 	// Domains creates an Ingress with one rule per entry.
 	Domains []DomainSpec `json:"domains,omitempty"`

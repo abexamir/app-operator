@@ -46,7 +46,7 @@ func main() {
 
 	srv := apiserver.New(k8sClient, ctrl.Log.WithName("apiserver"))
 	setupLog.Info("starting API server", "address", addr)
-	if err := srv.Run(addr); err != nil {
+	if err := srv.Run(ctrl.SetupSignalHandler(), addr); err != nil {
 		setupLog.Error(err, "API server stopped")
 		os.Exit(1)
 	}

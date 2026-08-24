@@ -984,16 +984,21 @@ spec:
                     description: MinReplicas is the HPA floor. Defaults to spec.replicas
                       or 1 when unset.
                     format: int32
+                    minimum: 1
                     type: integer
                   targetCPUUtilizationPercentage:
                     description: TargetCPUUtilizationPercentage scales on average
                       CPU utilization across pods.
                     format: int32
+                    maximum: 100
+                    minimum: 1
                     type: integer
                   targetMemoryUtilizationPercentage:
                     description: TargetMemoryUtilizationPercentage scales on average
                       memory utilization across pods.
                     format: int32
+                    maximum: 100
+                    minimum: 1
                     type: integer
                 required:
                 - enabled
@@ -1015,6 +1020,7 @@ spec:
                     mountPath:
                       description: MountPath is the directory where ConfigMap keys
                         appear as files in all containers.
+                      pattern: ^/
                       type: string
                     name:
                       description: Name identifies this entry. The ConfigMap is named
@@ -1166,6 +1172,7 @@ spec:
                     image:
                       description: Image is the OCI image reference (registry/repo:tag
                         or digest).
+                      minLength: 1
                       type: string
                     livenessProbe:
                       description: LivenessProbe restarts the container when it fails.
@@ -1190,6 +1197,7 @@ spec:
                           description: FailureThreshold is the number of consecutive
                             failures before marking unhealthy.
                           format: int32
+                          minimum: 1
                           type: integer
                         httpGet:
                           description: HTTPGet probes an HTTP endpoint. Use when type
@@ -1245,16 +1253,19 @@ spec:
                           description: InitialDelaySeconds waits before the first
                             probe after container start.
                           format: int32
+                          minimum: 0
                           type: integer
                         periodSeconds:
                           description: PeriodSeconds is the interval between probe
                             attempts.
                           format: int32
+                          minimum: 1
                           type: integer
                         successThreshold:
                           description: SuccessThreshold is the number of consecutive
                             successes before marking healthy.
                           format: int32
+                          minimum: 1
                           type: integer
                         tcpSocket:
                           description: TCPSocket probes a TCP port. Use when type
@@ -1279,6 +1290,7 @@ spec:
                         timeoutSeconds:
                           description: TimeoutSeconds is the per-probe timeout.
                           format: int32
+                          minimum: 1
                           type: integer
                         type:
                           description: 'Type selects the probe mechanism: httpGet,
@@ -1294,6 +1306,9 @@ spec:
                     name:
                       description: Name is the container name within the pod. Must
                         be unique among all containers.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                     ports:
                       description: Ports declares container ports, Service exposure,
@@ -1306,6 +1321,8 @@ spec:
                             description: ContainerPort is the port the process listens
                               on inside the container.
                             format: int32
+                            maximum: 65535
+                            minimum: 1
                             type: integer
                           expose:
                             description: |-
@@ -1344,6 +1361,9 @@ spec:
                             description: |-
                               Name is the port identifier used in the Service, Ingress, and ServiceMonitor.
                               Must be unique across all containers in the AppDefinition.
+                            maxLength: 15
+                            minLength: 1
+                            pattern: ^[a-z]([-a-z0-9]*[a-z0-9])?$
                             type: string
                           protocol:
                             default: TCP
@@ -1357,6 +1377,8 @@ spec:
                             description: ServicePort is the port number published
                               on the Kubernetes Service.
                             format: int32
+                            maximum: 65535
+                            minimum: 1
                             type: integer
                         required:
                         - containerPort
@@ -1388,6 +1410,7 @@ spec:
                           description: FailureThreshold is the number of consecutive
                             failures before marking unhealthy.
                           format: int32
+                          minimum: 1
                           type: integer
                         httpGet:
                           description: HTTPGet probes an HTTP endpoint. Use when type
@@ -1443,16 +1466,19 @@ spec:
                           description: InitialDelaySeconds waits before the first
                             probe after container start.
                           format: int32
+                          minimum: 0
                           type: integer
                         periodSeconds:
                           description: PeriodSeconds is the interval between probe
                             attempts.
                           format: int32
+                          minimum: 1
                           type: integer
                         successThreshold:
                           description: SuccessThreshold is the number of consecutive
                             successes before marking healthy.
                           format: int32
+                          minimum: 1
                           type: integer
                         tcpSocket:
                           description: TCPSocket probes a TCP port. Use when type
@@ -1477,6 +1503,7 @@ spec:
                         timeoutSeconds:
                           description: TimeoutSeconds is the per-probe timeout.
                           format: int32
+                          minimum: 1
                           type: integer
                         type:
                           description: 'Type selects the probe mechanism: httpGet,
@@ -1577,6 +1604,7 @@ spec:
                         mountPath:
                           description: MountPath is the absolute path inside every
                             container where SubPath is mounted.
+                          pattern: ^/
                           type: string
                         subPath:
                           description: SubPath is the directory within the PVC volume
@@ -1632,10 +1660,13 @@ spec:
                       type: string
                     name:
                       description: Name is the DNS hostname (e.g. app.example.com).
+                      maxLength: 253
+                      minLength: 1
                       type: string
                     path:
                       description: Path is the URL path prefix routed to the backend.
                         Defaults to /.
+                      pattern: ^/
                       type: string
                     portName:
                       description: PortName is the Service port name to route to.
@@ -1725,6 +1756,7 @@ spec:
                     mountPath:
                       description: MountPath mounts the synced Secret as files in
                         all containers.
+                      pattern: ^/
                       type: string
                     name:
                       description: Name identifies this entry. The ExternalSecret
@@ -1925,10 +1957,14 @@ spec:
                       type: array
                     image:
                       description: Image is the OCI image reference.
+                      minLength: 1
                       type: string
                     name:
                       description: Name is the init container name. Must be unique
                         among all containers.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                     resources:
                       description: Resources sets CPU and memory requests and limits.
@@ -2118,6 +2154,7 @@ spec:
                 description: Replicas is the desired pod count. Defaults to 1. Capped
                   at 1 when disk is set.
                 format: int32
+                minimum: 0
                 type: integer
               secrets:
                 description: Secrets creates inline or references pre-existing Secrets.
@@ -2139,6 +2176,7 @@ spec:
                       type: object
                     mountPath:
                       description: MountPath mounts the Secret as files in all containers.
+                      pattern: ^/
                       type: string
                     name:
                       description: Name identifies this entry. Inline secrets are

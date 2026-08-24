@@ -420,7 +420,11 @@ export function AppForm() {
     mutation.mutate({
       apiVersion: 'appdefinition.abexamir.me/v1',
       kind: 'AppDefinition',
-      metadata: { name: v.name, namespace: v.namespace },
+      metadata: {
+        name: v.name,
+        namespace: v.namespace,
+        ...(existing?.metadata.resourceVersion ? { resourceVersion: existing.metadata.resourceVersion } : {}),
+      },
       spec: buildSpec(v) as AppDefinition['spec'],
     })
   }

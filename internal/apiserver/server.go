@@ -1,7 +1,10 @@
 package apiserver
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -21,14 +24,40 @@ func New(c client.Client, log logr.Logger) *Server {
 	return s
 }
 
-func (s *Server) Run(addr string) error {
-	return http.ListenAndServe(addr, s.router)
+func (s *Server) Handler() http.Handler {
+	return s.router
+}
+
+func (s *Server) Run(ctx context.Context, addr string) error {
+	httpServer := &http.Server{
+		Addr:              addr,
+		Handler:           s.router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			s.log.Error(err, "failed to gracefully shut down API server")
+		}
+	}()
+
+	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 func (s *Server) buildRouter() *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestLogger(&middleware.DefaultLogFormatter{Logger: stdLogger{s.log}, NoColor: true}))
 	r.Use(middleware.Recoverer)
+	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(corsMiddleware)
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
