@@ -1739,9 +1739,9 @@ spec:
                         and Secret are named "<app>-<name>".
                       type: string
                     refreshInterval:
-                      default: 1h
+                      default: 1m
                       description: RefreshInterval is how often ESO re-reads the store.
-                        Defaults to 1h.
+                        Defaults to 1m.
                       type: string
                     store:
                       description: Store is the SecretStore or ClusterSecretStore
