@@ -80,7 +80,7 @@ function JsonField({ label, value, onChange }: { label: string; value: string; o
 interface PortForm { name: string; containerPort: number; servicePort: number; protocol: string; expose: boolean; metricsEnabled: boolean; metricsPath: string; metricsInterval: string }
 interface EnvForm { name: string; value: string }
 interface ContainerForm { name: string; image: string; command: string; args: string; env: EnvForm[]; ports: PortForm[]; resourcesJson: string; readinessProbeJson: string; livenessProbeJson: string }
-interface DomainForm { name: string; tls: boolean; redirectTls: boolean; certIssuer: string; path: string; portName: string; secretName: string; annotationsJson: string }
+interface DomainForm { name: string; tls: boolean; redirectTls: boolean; certIssuer: string; path: string; portName: string; secretName: string; annotationsJson: string; middlewaresJson: string }
 interface DiskPartitionForm { subPath: string; mountPath: string }
 interface ConfigMapForm { name: string; mountPath: string; dataJson: string }
 interface SecretForm { name: string; mountPath: string; asEnvVars: boolean; secretRef: string }
@@ -124,7 +124,7 @@ interface FormValues {
 
 const defaultContainer: ContainerForm = { name: '', image: '', command: '', args: '', env: [], ports: [], resourcesJson: '', readinessProbeJson: '', livenessProbeJson: '' }
 const defaultPort: PortForm = { name: 'http', containerPort: 8080, servicePort: 80, protocol: 'TCP', expose: true, metricsEnabled: false, metricsPath: '/metrics', metricsInterval: '' }
-const defaultDomain: DomainForm = { name: '', tls: true, redirectTls: true, certIssuer: '', path: '/', portName: 'http', secretName: '', annotationsJson: '' }
+const defaultDomain: DomainForm = { name: '', tls: true, redirectTls: true, certIssuer: '', path: '/', portName: 'http', secretName: '', annotationsJson: '', middlewaresJson: '' }
 
 const defaults: FormValues = {
   name: '', namespace: 'default', replicas: 1, serviceType: 'ClusterIP',
@@ -186,6 +186,7 @@ function buildSpec(v: FormValues) {
       certIssuer: d.certIssuer || undefined, path: d.path || undefined,
       portName: d.portName || undefined, secretName: d.secretName || undefined,
       annotations: parseJsonOr<Record<string, string> | undefined>(d.annotationsJson, undefined),
+      middlewares: parseJsonOr(d.middlewaresJson, undefined),
     })) : undefined,
     disk: v.diskEnabled ? {
       sizeInGi: +v.diskSizeInGi, storageClassName: v.diskStorageClassName || undefined,
@@ -255,6 +256,7 @@ function appToForm(app: AppDefinition): FormValues {
       name: d.name, tls: d.tls, redirectTls: d.redirect_tls ?? false,
       certIssuer: d.certIssuer ?? '', path: d.path ?? '/', portName: d.portName ?? 'http',
       secretName: d.secretName ?? '', annotationsJson: d.annotations ? JSON.stringify(d.annotations, null, 2) : '',
+      middlewaresJson: d.middlewares ? JSON.stringify(d.middlewares, null, 2) : '',
     })),
     diskEnabled: !!s.disk,
     diskSizeInGi: s.disk?.sizeInGi ?? 10,
@@ -551,6 +553,10 @@ export function AppForm() {
                     </Row>
                     <Controller control={control} name={`domains.${i}.annotationsJson`}
                       render={({ field }) => <JsonField label="Domain Annotations" value={field.value} onChange={field.onChange} />} />
+                    <Controller control={control} name={`domains.${i}.middlewaresJson`}
+                      render={({ field }) => <JsonField
+                        label='Traefik Middlewares (e.g. {"ipWhiteList": {"sourceRange": ["10.0.0.0/8"]}, "basicAuth": {"secretName": "..."}, "forwardAuth": {"address": "..."}, "headers": {...}, "rateLimit": {"average": 100}})'
+                        value={field.value} onChange={field.onChange} />} />
                     <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
                       <Button size="small" color="error" startIcon={<DeleteOutlinedIcon />} onClick={() => removeDomain(i)}>Remove</Button>
                     </Box>

@@ -323,6 +323,118 @@ type DomainSpec struct {
 	PortName string `json:"portName,omitempty"`
 	// SecretName is the TLS secret for this host. Defaults to <app>-<domain>-tls.
 	SecretName string `json:"secretName,omitempty"`
+	// Middlewares configures Traefik HTTP middlewares for this domain. Each non-nil field
+	// renders its own Middleware custom resource (traefik.io/v1alpha1, falling back to the
+	// legacy traefik.containo.us/v1alpha1 group for older clusters) and is chained onto this
+	// domain's Ingress via the traefik.ingress.kubernetes.io/router.middlewares annotation.
+	// Requires a Traefik ingress controller; has no effect otherwise.
+	Middlewares *MiddlewaresSpec `json:"middlewares,omitempty"`
+}
+
+// MiddlewaresSpec configures Traefik HTTP middlewares applied to a single domain. When more
+// than one field is set, they are chained in a fixed order: IPWhiteList and RateLimit filter
+// cheaply before the two auth mechanisms run, with Headers last since it only decorates the
+// response rather than gating the request. See enabledMiddlewareKinds in the controller.
+type MiddlewaresSpec struct {
+	// IPWhiteList restricts this domain to an allowed set of source IPs/CIDRs.
+	IPWhiteList *IPWhiteListSpec `json:"ipWhiteList,omitempty"`
+	// BasicAuth gates this domain behind HTTP Basic Authentication.
+	BasicAuth *BasicAuthSpec `json:"basicAuth,omitempty"`
+	// ForwardAuth delegates authentication/authorization to an external HTTP service.
+	ForwardAuth *ForwardAuthSpec `json:"forwardAuth,omitempty"`
+	// Headers injects/overrides request and response headers and toggles common security headers.
+	Headers *HeadersSpec `json:"headers,omitempty"`
+	// RateLimit caps the request rate accepted per client source.
+	RateLimit *RateLimitSpec `json:"rateLimit,omitempty"`
+}
+
+// IPStrategySpec mirrors Traefik's ipStrategy middleware option for determining the client IP
+// when Traefik itself sits behind another proxy or load balancer.
+type IPStrategySpec struct {
+	// Depth is the position of the IP to select in the X-Forwarded-For header, counted from
+	// the right. 0 (default) disables depth-based selection and uses the immediate remote IP.
+	Depth int `json:"depth,omitempty"`
+	// ExcludedIPs removes IPs/CIDRs from the X-Forwarded-For match before depth is applied.
+	ExcludedIPs []string `json:"excludedIPs,omitempty"`
+}
+
+// IPWhiteListSpec restricts requests to an allowed set of source IPs, enforced by a Traefik
+// ipAllowList (or legacy ipWhiteList) middleware.
+type IPWhiteListSpec struct {
+	// SourceRange is the list of allowed client IPs or CIDR ranges.
+	// +kubebuilder:validation:MinItems=1
+	SourceRange []string `json:"sourceRange"`
+	// IPStrategy configures how Traefik determines the client IP behind a proxy chain.
+	IPStrategy *IPStrategySpec `json:"ipStrategy,omitempty"`
+}
+
+// BasicAuthSpec gates a domain behind HTTP Basic Authentication.
+type BasicAuthSpec struct {
+	// SecretName references a Secret in the same namespace holding an htpasswd-formatted
+	// "users" key. Not managed by the operator — create it with e.g. `htpasswd -nb user pass`.
+	SecretName string `json:"secretName"`
+	// Realm is the authentication realm shown in the browser's credential prompt.
+	Realm string `json:"realm,omitempty"`
+	// RemoveHeader strips the Authorization header before forwarding to the backend.
+	RemoveHeader bool `json:"removeHeader,omitempty"`
+	// HeaderField, when set, passes the authenticated username to the backend in this request header.
+	HeaderField string `json:"headerField,omitempty"`
+}
+
+// ForwardAuthSpec delegates authentication/authorization to an external HTTP(S) service,
+// matching the traefik-forward-auth + SSO provider pattern.
+type ForwardAuthSpec struct {
+	// Address is the external authentication service URL, e.g. https://auth.example.com/verify.
+	Address string `json:"address"`
+	// TrustForwardHeader forwards X-Forwarded-* request headers to the auth service.
+	TrustForwardHeader bool `json:"trustForwardHeader,omitempty"`
+	// AuthResponseHeaders copies these headers from the auth service's response onto the
+	// forwarded request.
+	AuthResponseHeaders []string `json:"authResponseHeaders,omitempty"`
+	// AuthRequestHeaders limits which incoming request headers are forwarded to the auth
+	// service. Empty forwards all of them.
+	AuthRequestHeaders []string `json:"authRequestHeaders,omitempty"`
+	// TLSInsecureSkipVerify disables TLS certificate verification when calling Address.
+	TLSInsecureSkipVerify bool `json:"tlsInsecureSkipVerify,omitempty"`
+}
+
+// HeadersSpec injects/overrides request and response headers and toggles common security headers.
+type HeadersSpec struct {
+	// CustomRequestHeaders are added to the request before it reaches the backend.
+	CustomRequestHeaders map[string]string `json:"customRequestHeaders,omitempty"`
+	// CustomResponseHeaders are added to the response before it reaches the client.
+	CustomResponseHeaders map[string]string `json:"customResponseHeaders,omitempty"`
+	// STSSeconds enables Strict-Transport-Security with this max-age when greater than 0.
+	STSSeconds int64 `json:"stsSeconds,omitempty"`
+	// STSIncludeSubdomains adds the includeSubDomains directive to the STS header.
+	STSIncludeSubdomains bool `json:"stsIncludeSubdomains,omitempty"`
+	// STSPreload adds the preload directive to the STS header.
+	STSPreload bool `json:"stsPreload,omitempty"`
+	// ForceSTSHeader sends the STS header even on non-TLS responses.
+	ForceSTSHeader bool `json:"forceSTSHeader,omitempty"`
+	// FrameDeny sets X-Frame-Options to DENY.
+	FrameDeny bool `json:"frameDeny,omitempty"`
+	// ContentTypeNosniff sets X-Content-Type-Options to nosniff.
+	ContentTypeNosniff bool `json:"contentTypeNosniff,omitempty"`
+	// AccessControlAllowOriginList configures CORS allowed origins. Empty disables CORS handling.
+	AccessControlAllowOriginList []string `json:"accessControlAllowOriginList,omitempty"`
+	// AccessControlAllowMethods configures the CORS allowed methods.
+	AccessControlAllowMethods []string `json:"accessControlAllowMethods,omitempty"`
+	// AccessControlAllowHeaders configures the CORS allowed request headers.
+	AccessControlAllowHeaders []string `json:"accessControlAllowHeaders,omitempty"`
+	// AccessControlAllowCredentials configures the CORS Access-Control-Allow-Credentials header.
+	AccessControlAllowCredentials bool `json:"accessControlAllowCredentials,omitempty"`
+}
+
+// RateLimitSpec caps the request rate accepted per client source.
+type RateLimitSpec struct {
+	// Average is the max average number of requests per second allowed, measured over Period.
+	// +kubebuilder:validation:Minimum=1
+	Average int64 `json:"average"`
+	// Burst is the maximum number of requests allowed to arrive in a burst. Defaults to Average.
+	Burst int64 `json:"burst,omitempty"`
+	// Period over which Average is measured, e.g. "1s", "1m". Defaults to "1s".
+	Period string `json:"period,omitempty"`
 }
 
 // LifecycleHook runs an exec action inside the container.
@@ -406,6 +518,7 @@ const (
 	ConditionTypeHPAActive            = "HPAActive"
 	ConditionTypeExternalSecretsReady = "ExternalSecretsReady"
 	ConditionTypeMonitoringReady      = "MonitoringReady"
+	ConditionTypeMiddlewaresReady     = "MiddlewaresReady"
 )
 
 // AppDefinitionStatus reports the observed application state. Set by the operator.

@@ -51,7 +51,7 @@ AppDefinition CR (appdefinition.abexamir.me/v1)
   controller (cmd/main.go)              — Kubebuilder Manager, reconciles CRDs
         │
         ├── ConfigMaps → Secrets → ExternalSecrets → Deployment → Service
-        ├── PVC (if spec.disk) → Ingress (if spec.domains)
+        ├── PVC (if spec.disk) → Middlewares → Ingress (if spec.domains)
         ├── HPA (if spec.autoscaling.enabled) → ServiceMonitor (if metrics enabled)
         └── status subresource (phase, readyReplicas, per-resource conditions)
 
@@ -71,7 +71,7 @@ AppDefinition CR (appdefinition.abexamir.me/v1)
 1. `reconcileConfigMaps` → `reconcileSecrets` → `reconcileExternalSecrets`
 2. `reconcileDeployment` → `reconcileService`
 3. `reconcilePVC` (only when `spec.disk` is set)
-4. `reconcileIngress` (only when `spec.domains` is non-empty)
+4. `reconcileMiddlewares` → `reconcileIngress` (only when `spec.domains` is non-empty)
 5. `reconcileHPA` → `reconcileServiceMonitor`
 6. `updateStatus`
 
@@ -79,7 +79,11 @@ All resources use `ctrl.CreateOrUpdate` — the loop is fully idempotent. A 30-s
 
 **Config hash rollout**: when inline `configMaps[].data` or `secrets[].data` changes, a SHA-256 hash is stored in pod template annotation `appdefinition.abexamir.me/config-hash`, triggering a rolling restart automatically.
 
-**Desired-state pruning**: managed ConfigMaps, inline Secrets, ExternalSecrets, Ingresses, HPAs, Services, and ServiceMonitors that are removed or disabled in the spec are deleted during reconciliation. Pruning always checks the controller owner reference so similarly labeled resources owned by another controller are preserved. PVCs are intentionally retained when `spec.disk` is removed to avoid implicit data loss; deleting the AppDefinition still garbage-collects its owned PVC.
+**Desired-state pruning**: managed ConfigMaps, inline Secrets, ExternalSecrets, Ingresses, Middlewares, HPAs, Services, and ServiceMonitors that are removed or disabled in the spec are deleted during reconciliation. Pruning always checks the controller owner reference so similarly labeled resources owned by another controller are preserved. PVCs are intentionally retained when `spec.disk` is removed to avoid implicit data loss; deleting the AppDefinition still garbage-collects its owned PVC.
+
+**Ingress-per-domain**: `reconcileIngress` creates one Ingress object per `spec.domains` entry (named `<app>-<domain>`), not one shared Ingress with a rule per domain. This is required for `spec.domains[].middlewares`: Traefik's `traefik.ingress.kubernetes.io/router.middlewares` annotation applies to every rule in an Ingress object, so a domain's middlewares can only be scoped to that domain alone when it has its own Ingress.
+
+**Domain middlewares** (`spec.domains[].middlewares`): `reconcileMiddlewares` renders each configured middleware (`ipWhiteList`, `basicAuth`, `forwardAuth`, `headers`, `rateLimit`) as its own Traefik `Middleware` custom resource (`traefik.io/v1alpha1`, falling back to the legacy `traefik.containo.us/v1alpha1` group for older Traefik v2 clusters), named `<app>-<domain>-<kind>`. `reconcileIngress` chains them onto that domain's Ingress via `router.middlewares`, in the fixed order `ipallow → ratelimit → forwardauth → basicauth → headers`. Requires a Traefik ingress controller; has no effect otherwise. `MiddlewaresReady` status condition reports missing CRDs the same way `ExternalSecretsReady`/`MonitoringReady` do.
 
 **Operational metrics**: the controller exports per-step reconciliation latency/errors, prune counters, and per-AppDefinition readiness/generation gauges on its controller-runtime metrics endpoint. The API server exports RED-style HTTP metrics from `/metrics`. The optional `config/prometheus` overlay includes ServiceMonitors for both components and PrometheusRule alerts. `ExternalSecretsReady` and `MonitoringReady` status conditions expose missing optional CRDs instead of silently hiding the degraded integration.
 
@@ -93,9 +97,9 @@ All resources use `ctrl.CreateOrUpdate` — the loop is fully idempotent. A 30-s
 
 ### Optional integrations (gracefully skipped when CRDs absent)
 
-Both `ServiceMonitor` (prometheus-operator) and `ExternalSecret` (external-secrets.io) are managed via `unstructured.Unstructured` to avoid hard Go dependencies. When their CRDs are absent, `apimeta.IsNoMatchError` is caught and the step is silently skipped.
+`ServiceMonitor` (prometheus-operator), `ExternalSecret` (external-secrets.io), and `Middleware` (traefik.io / traefik.containo.us) are all managed via `unstructured.Unstructured` to avoid hard Go dependencies. When their CRDs are absent, `apimeta.IsNoMatchError` is caught and the step is silently skipped.
 
-`ExternalSecret` existence checks use `r.APIReader` (bypasses the informer cache) rather than `r.Get` because the cached client only has informers for scheme-registered types.
+Existence checks for all three go through `r.APIReader` (bypasses the informer cache) rather than `r.Get` because the cached client only has informers for scheme-registered types.
 
 ### API server (`internal/apiserver/`)
 

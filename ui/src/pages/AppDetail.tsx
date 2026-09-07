@@ -299,6 +299,9 @@ export function AppDetail() {
                         {d.annotations && Object.keys(d.annotations).length > 0 && (
                           <KV label="Annotations" value={<Code>{JSON.stringify(d.annotations, null, 2)}</Code>} />
                         )}
+                        {d.middlewares && (
+                          <KV label="Middlewares" value={<Code>{JSON.stringify(d.middlewares, null, 2)}</Code>} />
+                        )}
                       </TableBody></Table>
                     </Paper>
                   ))}

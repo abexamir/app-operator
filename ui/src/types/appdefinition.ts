@@ -41,6 +41,60 @@ export interface ContainerSpec {
   }
 }
 
+export interface IPStrategySpec {
+  depth?: number
+  excludedIPs?: string[]
+}
+
+export interface IPWhiteListSpec {
+  sourceRange: string[]
+  ipStrategy?: IPStrategySpec
+}
+
+export interface BasicAuthSpec {
+  secretName: string
+  realm?: string
+  removeHeader?: boolean
+  headerField?: string
+}
+
+export interface ForwardAuthSpec {
+  address: string
+  trustForwardHeader?: boolean
+  authResponseHeaders?: string[]
+  authRequestHeaders?: string[]
+  tlsInsecureSkipVerify?: boolean
+}
+
+export interface HeadersSpec {
+  customRequestHeaders?: Record<string, string>
+  customResponseHeaders?: Record<string, string>
+  stsSeconds?: number
+  stsIncludeSubdomains?: boolean
+  stsPreload?: boolean
+  forceSTSHeader?: boolean
+  frameDeny?: boolean
+  contentTypeNosniff?: boolean
+  accessControlAllowOriginList?: string[]
+  accessControlAllowMethods?: string[]
+  accessControlAllowHeaders?: string[]
+  accessControlAllowCredentials?: boolean
+}
+
+export interface RateLimitSpec {
+  average: number
+  burst?: number
+  period?: string
+}
+
+export interface MiddlewaresSpec {
+  ipWhiteList?: IPWhiteListSpec
+  basicAuth?: BasicAuthSpec
+  forwardAuth?: ForwardAuthSpec
+  headers?: HeadersSpec
+  rateLimit?: RateLimitSpec
+}
+
 export interface DomainSpec {
   name: string
   tls: boolean
@@ -50,6 +104,7 @@ export interface DomainSpec {
   portName?: string
   secretName?: string
   annotations?: Record<string, string>
+  middlewares?: MiddlewaresSpec
 }
 
 export interface DiskPartition {

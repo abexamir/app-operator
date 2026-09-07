@@ -303,6 +303,53 @@ var _ = Describe("AppDefinition Controller", func() {
 			Expect(condition.Reason).To(Equal("CRDUnavailable"))
 		})
 
+		It("should scope an ipWhiteList to its own domain's Ingress and expose an unavailable Middleware integration in status", func() {
+			mwName := types.NamespacedName{Name: "middleware-test", Namespace: namespace}
+			app := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: mwName.Name, Namespace: namespace},
+				Spec: appdefinitionv1.AppDefinitionSpec{
+					Containers: []appdefinitionv1.ContainerSpec{{
+						Name: "web", Image: "nginx:latest", Ports: []appdefinitionv1.PortSpec{{
+							Name: "http", ContainerPort: 80, ServicePort: 80, Protocol: "TCP", Expose: true,
+						}},
+					}},
+					Domains: []appdefinitionv1.DomainSpec{
+						{
+							Name: "admin.example.com", Path: "/", PortName: "http",
+							Middlewares: &appdefinitionv1.MiddlewaresSpec{
+								IPWhiteList: &appdefinitionv1.IPWhiteListSpec{SourceRange: []string{"10.0.0.0/8"}},
+							},
+						},
+						{Name: "public.example.com", Path: "/", PortName: "http"},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, app)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, app) })
+
+			r := newTestReconciler()
+			reconcileTwice(r, mwName)
+
+			protectedIngress := &networkingv1.Ingress{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: domainIngressName(mwName.Name, "admin.example.com"), Namespace: namespace,
+			}, protectedIngress)).To(Succeed())
+			Expect(protectedIngress.Annotations["traefik.ingress.kubernetes.io/router.middlewares"]).To(
+				Equal(namespace + "-" + middlewareName(mwName.Name, "admin.example.com", "ipallow") + "@kubernetescrd"))
+
+			publicIngress := &networkingv1.Ingress{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: domainIngressName(mwName.Name, "public.example.com"), Namespace: namespace,
+			}, publicIngress)).To(Succeed())
+			Expect(publicIngress.Annotations).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.middlewares"))
+
+			Expect(k8sClient.Get(ctx, mwName, app)).To(Succeed())
+			condition := apimeta.FindStatusCondition(app.Status.Conditions, appdefinitionv1.ConditionTypeMiddlewaresReady)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal("CRDUnavailable"))
+		})
+
 		It("should prune stale managed resources and conditions while preserving unowned resources", func() {
 			pruneName := types.NamespacedName{Name: "prune-test", Namespace: namespace}
 			app := &appdefinitionv1.AppDefinition{
@@ -339,9 +386,10 @@ var _ = Describe("AppDefinition Controller", func() {
 			r := newTestReconciler()
 			reconcileTwice(r, pruneName)
 
+			pruneIngressName := types.NamespacedName{Name: domainIngressName(pruneName.Name, "prune.example.com"), Namespace: namespace}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "prune-test-settings", Namespace: namespace}, &corev1.ConfigMap{})).To(Succeed())
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "prune-test-credentials", Namespace: namespace}, &corev1.Secret{})).To(Succeed())
-			Expect(k8sClient.Get(ctx, pruneName, &networkingv1.Ingress{})).To(Succeed())
+			Expect(k8sClient.Get(ctx, pruneIngressName, &networkingv1.Ingress{})).To(Succeed())
 
 			Expect(k8sClient.Get(ctx, pruneName, app)).To(Succeed())
 			app.Spec.ConfigMaps = nil
@@ -355,7 +403,7 @@ var _ = Describe("AppDefinition Controller", func() {
 			Expect(errors.IsNotFound(err)).To(BeTrue())
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: "prune-test-credentials", Namespace: namespace}, &corev1.Secret{})
 			Expect(errors.IsNotFound(err)).To(BeTrue())
-			err = k8sClient.Get(ctx, pruneName, &networkingv1.Ingress{})
+			err = k8sClient.Get(ctx, pruneIngressName, &networkingv1.Ingress{})
 			Expect(errors.IsNotFound(err)).To(BeTrue())
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: unowned.Name, Namespace: namespace}, unowned)).To(Succeed())
 

@@ -79,6 +79,21 @@ func tlsSecretName(appName, domain string) string {
 	return fmt.Sprintf("%s-%s-tls", appName, safe)
 }
 
+// domainIngressName names the per-domain Ingress object. One Ingress is created per domain
+// (rather than one shared Ingress with multiple host rules) so that Traefik's
+// router.middlewares annotation — which applies to every rule in an Ingress object, not to a
+// single host within it — can scope a domain's middlewares to that domain alone.
+func domainIngressName(appName, domain string) string {
+	return fmt.Sprintf("%s-%s", appName, sanitizeDNS(domain))
+}
+
+// middlewareName names a per-domain, per-kind Traefik Middleware object. kind is one of the
+// suffixes produced by enabledMiddlewareKinds ("ipallow", "ratelimit", "forwardauth",
+// "basicauth", "headers").
+func middlewareName(appName, domain, kind string) string {
+	return fmt.Sprintf("%s-%s-%s", appName, sanitizeDNS(domain), kind)
+}
+
 func sanitizeDNS(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {

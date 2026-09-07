@@ -129,27 +129,37 @@ func (r *AppDefinitionReconciler) updateStatusOnce(ctx context.Context, appDef *
 		apimeta.RemoveStatusCondition(&fresh.Status.Conditions, v1.ConditionTypeDiskReady)
 	}
 
-	// IngressReady: set when domains are declared; reflects whether the ingress controller
-	// has assigned an IP or hostname.
+	// IngressReady: set when domains are declared; true only once every domain's own Ingress
+	// (see domainIngressName) has an assigned address.
 	if len(appDef.Spec.Domains) > 0 {
-		ingress := &networkingv1.Ingress{}
-		ingressStatus := metav1.ConditionFalse
-		ingressReason := "Pending"
-		ingressMsg := "Ingress controller has not yet assigned an address"
-		if err := r.Get(ctx, types.NamespacedName{Name: appDef.Name, Namespace: appDef.Namespace}, ingress); err == nil {
-			if len(ingress.Status.LoadBalancer.Ingress) > 0 {
-				addrs := make([]string, 0, len(ingress.Status.LoadBalancer.Ingress))
+		var addrs []string
+		pending := 0
+		for _, domain := range appDef.Spec.Domains {
+			ingress := &networkingv1.Ingress{}
+			name := types.NamespacedName{Name: domainIngressName(appDef.Name, domain.Name), Namespace: appDef.Namespace}
+			assigned := false
+			if err := r.Get(ctx, name, ingress); err == nil {
 				for _, lb := range ingress.Status.LoadBalancer.Ingress {
 					if lb.IP != "" {
-						addrs = append(addrs, lb.IP)
+						addrs = append(addrs, fmt.Sprintf("%s: %s", domain.Name, lb.IP))
+						assigned = true
 					} else if lb.Hostname != "" {
-						addrs = append(addrs, lb.Hostname)
+						addrs = append(addrs, fmt.Sprintf("%s: %s", domain.Name, lb.Hostname))
+						assigned = true
 					}
 				}
-				ingressStatus = metav1.ConditionTrue
-				ingressReason = "Assigned"
-				ingressMsg = strings.Join(addrs, ", ")
 			}
+			if !assigned {
+				pending++
+			}
+		}
+		ingressStatus := metav1.ConditionTrue
+		ingressReason := "Assigned"
+		ingressMsg := strings.Join(addrs, ", ")
+		if pending > 0 {
+			ingressStatus = metav1.ConditionFalse
+			ingressReason = "Pending"
+			ingressMsg = fmt.Sprintf("%d/%d domains pending address assignment", pending, len(appDef.Spec.Domains))
 		}
 		apimeta.SetStatusCondition(&fresh.Status.Conditions, metav1.Condition{
 			Type:               v1.ConditionTypeIngressReady,
@@ -190,6 +200,7 @@ func (r *AppDefinitionReconciler) updateStatusOnce(ctx context.Context, appDef *
 
 	r.updateExternalSecretsStatus(ctx, fresh, now)
 	r.updateMonitoringStatus(ctx, fresh, now)
+	r.updateMiddlewaresStatus(ctx, fresh, now)
 
 	if err := r.Status().Update(ctx, fresh); err != nil {
 		return fmt.Errorf("failed to update AppDefinition status: %w", err)
@@ -264,6 +275,55 @@ func (r *AppDefinitionReconciler) updateMonitoringStatus(ctx context.Context, ap
 	default:
 		condition.Status = metav1.ConditionUnknown
 		condition.Reason = "ReadFailed"
+		condition.Message = err.Error()
+	}
+	apimeta.SetStatusCondition(&appDef.Status.Conditions, condition)
+}
+
+func (r *AppDefinitionReconciler) updateMiddlewaresStatus(ctx context.Context, appDef *v1.AppDefinition, now metav1.Time) {
+	type desiredMiddleware struct {
+		domain string
+		kind   string
+	}
+	var desired []desiredMiddleware
+	for _, domain := range appDef.Spec.Domains {
+		for _, kind := range enabledMiddlewareKinds(domain) {
+			desired = append(desired, desiredMiddleware{domain: domain.Name, kind: kind})
+		}
+	}
+	if len(desired) == 0 {
+		apimeta.RemoveStatusCondition(&appDef.Status.Conditions, v1.ConditionTypeMiddlewaresReady)
+		return
+	}
+
+	condition := metav1.Condition{
+		Type: v1.ConditionTypeMiddlewaresReady, Status: metav1.ConditionFalse,
+		Reason: "CRDUnavailable", Message: "Traefik Middleware CRD is not installed",
+		LastTransitionTime: now, ObservedGeneration: appDef.Generation,
+	}
+	api, err := resolveMiddlewareAPI(r.RESTMapper())
+	if err == nil {
+		condition.Reason = "ResourcesPending"
+		condition.Message = "Middleware resources are being created"
+		ready := 0
+		for _, dm := range desired {
+			obj := &unstructured.Unstructured{}
+			obj.SetGroupVersionKind(api.gvk)
+			key := types.NamespacedName{Name: middlewareName(appDef.Name, dm.domain, dm.kind), Namespace: appDef.Namespace}
+			if getErr := r.APIReader.Get(ctx, key, obj); getErr == nil {
+				ready++
+			}
+		}
+		if ready == len(desired) {
+			condition.Status = metav1.ConditionTrue
+			condition.Reason = "ResourcesCreated"
+			condition.Message = fmt.Sprintf("%d Middleware resources created", ready)
+		} else {
+			condition.Message = fmt.Sprintf("%d/%d Middleware resources created", ready, len(desired))
+		}
+	} else if !apimeta.IsNoMatchError(err) {
+		condition.Status = metav1.ConditionUnknown
+		condition.Reason = "DiscoveryFailed"
 		condition.Message = err.Error()
 	}
 	apimeta.SetStatusCondition(&appDef.Status.Conditions, condition)
