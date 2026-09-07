@@ -1666,6 +1666,187 @@ spec:
                       description: CertIssuer is the cert-manager ClusterIssuer or
                         Issuer name for automatic TLS.
                       type: string
+                    middlewares:
+                      description: |-
+                        Middlewares configures Traefik HTTP middlewares for this domain. Each non-nil field
+                        renders its own Middleware custom resource (traefik.io/v1alpha1, falling back to the
+                        legacy traefik.containo.us/v1alpha1 group for older clusters) and is chained onto this
+                        domain's Ingress via the traefik.ingress.kubernetes.io/router.middlewares annotation.
+                        Requires a Traefik ingress controller; has no effect otherwise.
+                      properties:
+                        basicAuth:
+                          description: BasicAuth gates this domain behind HTTP Basic
+                            Authentication.
+                          properties:
+                            headerField:
+                              description: HeaderField, when set, passes the authenticated
+                                username to the backend in this request header.
+                              type: string
+                            realm:
+                              description: Realm is the authentication realm shown
+                                in the browser's credential prompt.
+                              type: string
+                            removeHeader:
+                              description: RemoveHeader strips the Authorization header
+                                before forwarding to the backend.
+                              type: boolean
+                            secretName:
+                              description: |-
+                                SecretName references a Secret in the same namespace holding an htpasswd-formatted
+                                "users" key. Not managed by the operator — create it with e.g. `htpasswd -nb user pass`.
+                              type: string
+                          required:
+                          - secretName
+                          type: object
+                        forwardAuth:
+                          description: ForwardAuth delegates authentication/authorization
+                            to an external HTTP service.
+                          properties:
+                            address:
+                              description: Address is the external authentication
+                                service URL, e.g. https://auth.example.com/verify.
+                              type: string
+                            authRequestHeaders:
+                              description: |-
+                                AuthRequestHeaders limits which incoming request headers are forwarded to the auth
+                                service. Empty forwards all of them.
+                              items:
+                                type: string
+                              type: array
+                            authResponseHeaders:
+                              description: |-
+                                AuthResponseHeaders copies these headers from the auth service's response onto the
+                                forwarded request.
+                              items:
+                                type: string
+                              type: array
+                            tlsInsecureSkipVerify:
+                              description: TLSInsecureSkipVerify disables TLS certificate
+                                verification when calling Address.
+                              type: boolean
+                            trustForwardHeader:
+                              description: TrustForwardHeader forwards X-Forwarded-*
+                                request headers to the auth service.
+                              type: boolean
+                          required:
+                          - address
+                          type: object
+                        headers:
+                          description: Headers injects/overrides request and response
+                            headers and toggles common security headers.
+                          properties:
+                            accessControlAllowCredentials:
+                              description: AccessControlAllowCredentials configures
+                                the CORS Access-Control-Allow-Credentials header.
+                              type: boolean
+                            accessControlAllowHeaders:
+                              description: AccessControlAllowHeaders configures the
+                                CORS allowed request headers.
+                              items:
+                                type: string
+                              type: array
+                            accessControlAllowMethods:
+                              description: AccessControlAllowMethods configures the
+                                CORS allowed methods.
+                              items:
+                                type: string
+                              type: array
+                            accessControlAllowOriginList:
+                              description: AccessControlAllowOriginList configures
+                                CORS allowed origins. Empty disables CORS handling.
+                              items:
+                                type: string
+                              type: array
+                            contentTypeNosniff:
+                              description: ContentTypeNosniff sets X-Content-Type-Options
+                                to nosniff.
+                              type: boolean
+                            customRequestHeaders:
+                              additionalProperties:
+                                type: string
+                              description: CustomRequestHeaders are added to the request
+                                before it reaches the backend.
+                              type: object
+                            customResponseHeaders:
+                              additionalProperties:
+                                type: string
+                              description: CustomResponseHeaders are added to the
+                                response before it reaches the client.
+                              type: object
+                            forceSTSHeader:
+                              description: ForceSTSHeader sends the STS header even
+                                on non-TLS responses.
+                              type: boolean
+                            frameDeny:
+                              description: FrameDeny sets X-Frame-Options to DENY.
+                              type: boolean
+                            stsIncludeSubdomains:
+                              description: STSIncludeSubdomains adds the includeSubDomains
+                                directive to the STS header.
+                              type: boolean
+                            stsPreload:
+                              description: STSPreload adds the preload directive to
+                                the STS header.
+                              type: boolean
+                            stsSeconds:
+                              description: STSSeconds enables Strict-Transport-Security
+                                with this max-age when greater than 0.
+                              format: int64
+                              type: integer
+                          type: object
+                        ipWhiteList:
+                          description: IPWhiteList restricts this domain to an allowed
+                            set of source IPs/CIDRs.
+                          properties:
+                            ipStrategy:
+                              description: IPStrategy configures how Traefik determines
+                                the client IP behind a proxy chain.
+                              properties:
+                                depth:
+                                  description: |-
+                                    Depth is the position of the IP to select in the X-Forwarded-For header, counted from
+                                    the right. 0 (default) disables depth-based selection and uses the immediate remote IP.
+                                  type: integer
+                                excludedIPs:
+                                  description: ExcludedIPs removes IPs/CIDRs from
+                                    the X-Forwarded-For match before depth is applied.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            sourceRange:
+                              description: SourceRange is the list of allowed client
+                                IPs or CIDR ranges.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                          required:
+                          - sourceRange
+                          type: object
+                        rateLimit:
+                          description: RateLimit caps the request rate accepted per
+                            client source.
+                          properties:
+                            average:
+                              description: Average is the max average number of requests
+                                per second allowed, measured over Period.
+                              format: int64
+                              minimum: 1
+                              type: integer
+                            burst:
+                              description: Burst is the maximum number of requests
+                                allowed to arrive in a burst. Defaults to Average.
+                              format: int64
+                              type: integer
+                            period:
+                              description: Period over which Average is measured,
+                                e.g. "1s", "1m". Defaults to "1s".
+                              type: string
+                          required:
+                          - average
+                          type: object
+                      type: object
                     name:
                       description: Name is the DNS hostname (e.g. app.example.com).
                       maxLength: 253
@@ -2868,6 +3049,19 @@ rules:
   - networking.k8s.io
   resources:
   - ingresses
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - traefik.containo.us
+  - traefik.io
+  resources:
+  - middlewares
   verbs:
   - create
   - delete
