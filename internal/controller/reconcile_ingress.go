@@ -51,10 +51,7 @@ func (r *AppDefinitionReconciler) reconcileIngress(ctx context.Context, appDef *
 			for k, v := range domain.Annotations {
 				annotations[k] = v
 			}
-			if domain.TLS && domain.RedirectTLS {
-				annotations["nginx.ingress.kubernetes.io/force-ssl-redirect"] = "true"
-			}
-			if domain.CertIssuer != "" {
+			if domain.TLS && domain.CertIssuer != "" {
 				annotations["cert-manager.io/cluster-issuer"] = domain.CertIssuer
 			}
 			if kinds := enabledMiddlewareKinds(domain); len(kinds) > 0 {

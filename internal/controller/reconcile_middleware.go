@@ -51,15 +51,25 @@ func resolveMiddlewareAPI(mapper apimeta.RESTMapper) (middlewareAPI, error) {
 }
 
 // enabledMiddlewareKinds returns the configured middleware kinds for a domain, in the fixed
-// chain order applied via the router.middlewares annotation (see MiddlewaresSpec's doc
-// comment): IPWhiteList and RateLimit filter cheaply before the two auth mechanisms run, with
+// chain order applied via the router.middlewares annotation: RedirectScheme runs first so an
+// insecure request is bounced to HTTPS before spending any cycles on the rest of the chain,
+// then IPWhiteList and RateLimit filter cheaply before the two auth mechanisms run, with
 // Headers last since it only decorates the response rather than gating the request.
+//
+// RedirectScheme is driven by DomainSpec.TLS/RedirectTLS directly rather than a
+// MiddlewaresSpec field — it replaces the old nginx.ingress.kubernetes.io/force-ssl-redirect
+// annotation reconcile_ingress.go used to set, which Traefik silently ignored (that annotation
+// belongs to the ingress-nginx controller). A Traefik redirectScheme Middleware is the only way
+// to actually get the redirect this cluster's Traefik never does globally.
 func enabledMiddlewareKinds(domain v1.DomainSpec) []string {
+	var kinds []string
+	if domain.TLS && domain.RedirectTLS {
+		kinds = append(kinds, "redirectscheme")
+	}
 	mw := domain.Middlewares
 	if mw == nil {
-		return nil
+		return kinds
 	}
-	var kinds []string
 	if mw.IPWhiteList != nil {
 		kinds = append(kinds, "ipallow")
 	}
@@ -202,6 +212,8 @@ func (r *AppDefinitionReconciler) pruneMiddlewares(
 func buildMiddlewareSpec(kind string, domain v1.DomainSpec, api middlewareAPI) map[string]interface{} {
 	mw := domain.Middlewares
 	switch kind {
+	case "redirectscheme":
+		return map[string]interface{}{"redirectScheme": map[string]interface{}{"scheme": "https", "permanent": true}}
 	case "ipallow":
 		return buildIPAllowListSpec(mw.IPWhiteList, api)
 	case "ratelimit":

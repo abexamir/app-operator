@@ -331,10 +331,11 @@ type DomainSpec struct {
 	Middlewares *MiddlewaresSpec `json:"middlewares,omitempty"`
 }
 
-// MiddlewaresSpec configures Traefik HTTP middlewares applied to a single domain. When more
-// than one field is set, they are chained in a fixed order: IPWhiteList and RateLimit filter
-// cheaply before the two auth mechanisms run, with Headers last since it only decorates the
-// response rather than gating the request. See enabledMiddlewareKinds in the controller.
+// MiddlewaresSpec configures Traefik HTTP middlewares applied to a single domain, chained
+// after a TLS-redirect middleware implied by TLS+RedirectTLS (see enabledMiddlewareKinds in
+// the controller). When more than one field here is set, they chain in a fixed order:
+// IPWhiteList and RateLimit filter cheaply before the two auth mechanisms run, with Headers
+// last since it only decorates the response rather than gating the request.
 type MiddlewaresSpec struct {
 	// IPWhiteList restricts this domain to an allowed set of source IPs/CIDRs.
 	IPWhiteList *IPWhiteListSpec `json:"ipWhiteList,omitempty"`

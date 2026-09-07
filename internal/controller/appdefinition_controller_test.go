@@ -350,6 +350,72 @@ var _ = Describe("AppDefinition Controller", func() {
 			Expect(condition.Reason).To(Equal("CRDUnavailable"))
 		})
 
+		It("should not set TLS-only annotations or a redirect middleware on a non-TLS domain even when certIssuer/redirect_tls are set", func() {
+			noTLSName := types.NamespacedName{Name: "no-tls-annotations-test", Namespace: namespace}
+			app := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: noTLSName.Name, Namespace: namespace},
+				Spec: appdefinitionv1.AppDefinitionSpec{
+					Containers: []appdefinitionv1.ContainerSpec{{
+						Name: "web", Image: "nginx:latest", Ports: []appdefinitionv1.PortSpec{{
+							Name: "http", ContainerPort: 80, ServicePort: 80, Protocol: "TCP", Expose: true,
+						}},
+					}},
+					Domains: []appdefinitionv1.DomainSpec{{
+						Name: "no-tls.example.com", Path: "/", PortName: "http",
+						TLS: false, RedirectTLS: true, CertIssuer: "letsencrypt-prod",
+					}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, app)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, app) })
+
+			r := newTestReconciler()
+			reconcileTwice(r, noTLSName)
+
+			ingress := &networkingv1.Ingress{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: domainIngressName(noTLSName.Name, "no-tls.example.com"), Namespace: namespace,
+			}, ingress)).To(Succeed())
+			Expect(ingress.Annotations).NotTo(HaveKey("cert-manager.io/cluster-issuer"))
+			Expect(ingress.Annotations).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.middlewares"))
+			Expect(ingress.Spec.TLS).To(BeEmpty())
+		})
+
+		It("should chain a redirectScheme middleware first when tls+redirect_tls are set, ahead of an explicit middleware", func() {
+			redirectName := types.NamespacedName{Name: "redirect-scheme-test", Namespace: namespace}
+			app := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: redirectName.Name, Namespace: namespace},
+				Spec: appdefinitionv1.AppDefinitionSpec{
+					Containers: []appdefinitionv1.ContainerSpec{{
+						Name: "web", Image: "nginx:latest", Ports: []appdefinitionv1.PortSpec{{
+							Name: "http", ContainerPort: 80, ServicePort: 80, Protocol: "TCP", Expose: true,
+						}},
+					}},
+					Domains: []appdefinitionv1.DomainSpec{{
+						Name: "secure.example.com", Path: "/", PortName: "http",
+						TLS: true, RedirectTLS: true,
+						Middlewares: &appdefinitionv1.MiddlewaresSpec{
+							RateLimit: &appdefinitionv1.RateLimitSpec{Average: 10},
+						},
+					}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, app)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, app) })
+
+			r := newTestReconciler()
+			reconcileTwice(r, redirectName)
+
+			ingress := &networkingv1.Ingress{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: domainIngressName(redirectName.Name, "secure.example.com"), Namespace: namespace,
+			}, ingress)).To(Succeed())
+			Expect(ingress.Annotations["traefik.ingress.kubernetes.io/router.middlewares"]).To(Equal(
+				namespace + "-" + middlewareName(redirectName.Name, "secure.example.com", "redirectscheme") + "@kubernetescrd," +
+					namespace + "-" + middlewareName(redirectName.Name, "secure.example.com", "ratelimit") + "@kubernetescrd",
+			))
+		})
+
 		It("should prune stale managed resources and conditions while preserving unowned resources", func() {
 			pruneName := types.NamespacedName{Name: "prune-test", Namespace: namespace}
 			app := &appdefinitionv1.AppDefinition{
