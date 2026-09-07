@@ -96,11 +96,13 @@ AppDefinitionReconciler  (internal/controller/appdefinition_controller.go)
        │                                            lifecycle, config-hash annotation, scheduling)
        ├── reconcileService()        → Service     (expose:true ports; serviceType)
        ├── reconcilePVC()            → PVC         (create; expand when sizeInGi increases)
-       ├── reconcileIngress()        → Ingress     (per-domain rules and TLS blocks)
+       ├── reconcileMiddlewares()    → Middleware  (one per domains[].middlewares kind; skipped gracefully when Traefik CRD absent)
+       ├── reconcileIngress()        → Ingress     (one per domain, chaining that domain's Middlewares)
        ├── reconcileHPA()            → HPA         (created/deleted based on autoscaling.enabled)
        ├── reconcileServiceMonitor() → ServiceMonitor (skipped gracefully when CRD absent)
-       └── updateStatus()            → status subresource (phase, readyReplicas,
-                                       Ready / DiskReady / IngressReady / HPAActive conditions)
+       └── updateStatus()            → status subresource (phase, readyReplicas, Ready /
+                                       DiskReady / IngressReady / HPAActive /
+                                       ExternalSecretsReady / MonitoringReady / MiddlewaresReady)
 ```
 
 Reconciliation order is intentional: ConfigMaps and Secrets are created before the Deployment so all mounts are available when pods start.
@@ -155,16 +157,36 @@ A `SecretMount` with `secretRef` set tells the operator to use an existing Secre
 
 This works with any source that creates Kubernetes Secrets: External Secrets Operator, Vault agent sidecar, Sealed Secrets, or plain `kubectl create secret`. The `data` and `secretRef` fields are mutually exclusive and enforced by a CEL validation rule on the CRD — no webhook needed.
 
+### One Ingress per domain
+
+`reconcileIngress` creates one `Ingress` object per `spec.domains` entry (`domainIngressName`: `<app>-<sanitized-domain>`), not one shared `Ingress` with a rule per domain. This is required by domain middlewares: Traefik's `router.middlewares` annotation applies to every rule in an `Ingress` object, so a domain's middlewares can only be scoped to that domain alone when it has its own `Ingress`. `pruneIngresses` lists by the app's standard labels, checks `metav1.IsControlledBy`, and deletes any `Ingress` no longer in the desired per-domain name set — the same pattern `pruneExternalSecrets` and `pruneMiddlewares` use.
+
+### Domain middlewares
+
+`reconcileMiddlewares` renders each configured `spec.domains[].middlewares` kind as its own Traefik `Middleware` custom resource, via `unstructured.Unstructured` (same pattern as `ExternalSecret`/`ServiceMonitor`, and for the same reason: no hard Go dependency on Traefik's types).
+
+- **API version resolution** (`resolveMiddlewareAPI`): tries `middlewareAPICandidates` in order — `traefik.io/v1alpha1` first (current group, Traefik v2.10+/v3; IP allow-list field is `ipAllowList`), falling back to the legacy `traefik.containo.us/v1alpha1` group (removed in Traefik v3 but still served by older v2 clusters; IP allow-list field is `ipWhiteList`). Returns the mapper's own `NoMatchError` when neither resolves, so the same `apimeta.IsNoMatchError` graceful-skip handling applies.
+- **Naming** (`middlewareName`): `<app>-<sanitized-domain>-<kind>`, one `Middleware` per kind — never one `Middleware` holding multiple middleware types.
+- **Ordering** (`enabledMiddlewareKinds`): `redirectscheme → ipallow → ratelimit → forwardauth → basicauth → headers`. `redirectscheme` isn't a `MiddlewaresSpec` field; it's implied by `domain.TLS && domain.RedirectTLS` and always runs first, ahead of anything in `middlewares` — see reconcile_ingress.go's annotation builder and reconcile_middleware.go's `buildMiddlewareSpec`, which both read this same function so naming and enablement can't drift apart.
+- **Spec rendering** (`buildMiddlewareSpec` and its per-kind `buildXSpec` helpers): builds the Traefik-schema `spec` body for one kind — `ipStrategy`, `authResponseHeaders`, `customResponseHeaders`, etc. are only included when set, matching Traefik's own optional-field conventions.
+- **Chaining** (in `reconcileIngress`): `traefik.ingress.kubernetes.io/router.middlewares` is set to a comma-joined list of `<namespace>-<middlewareName>@kubernetescrd` refs, in the order `enabledMiddlewareKinds` returns.
+- **Pruning** (`pruneMiddlewares`): same pattern as `pruneExternalSecrets` — lists by the app's standard labels, checks `metav1.IsControlledBy`, deletes anything no longer in the desired name set.
+
+`basicAuth.secretName` and `forwardAuth`/`headers`/`rateLimit` reference or point at resources the operator does not create or validate — a missing Secret or unreachable `forwardAuth.address` fails at the Traefik layer, not at reconcile time.
+
 ### Per-resource status conditions
 
-`updateStatus` sets four conditions on every reconcile pass:
+`updateStatus` sets these conditions on every reconcile pass (all but `Ready` are removed from `status.conditions` entirely when their trigger field is unset, rather than left around as `False`):
 
 | Condition | Set when | `True` when |
 |---|---|---|
 | `Ready` | Always | `readyReplicas >= desiredReplicas` |
 | `DiskReady` | `spec.disk` is set | PVC phase is `Bound` |
-| `IngressReady` | `spec.domains` is non-empty | Ingress has at least one LoadBalancer address assigned |
+| `IngressReady` | `spec.domains` is non-empty | Every domain's own `Ingress` (see `domainIngressName`) has at least one LoadBalancer address assigned |
 | `HPAActive` | `spec.autoscaling.enabled: true` | HPA resource exists |
+| `ExternalSecretsReady` | `spec.externalSecrets` is non-empty | Every `ExternalSecret` resource exists. `CRDUnavailable` if none of `externalSecretAPIVersions` resolve |
+| `MonitoringReady` | Any port has `metrics.enabled: true` | The `ServiceMonitor` resource exists. `CRDUnavailable` if the CRD isn't installed |
+| `MiddlewaresReady` | Any domain has `middlewares` set or `tls`+`redirect_tls` | Every `Middleware` resource (see `enabledMiddlewareKinds`) exists. `CRDUnavailable` if neither `middlewareAPICandidates` group resolves |
 
 ### Deployment strategy
 
@@ -211,6 +233,8 @@ Generated from `// +kubebuilder:rbac:...` markers in `appdefinition_controller.g
 | `autoscaling` | `horizontalpodautoscalers` | full |
 | `monitoring.coreos.com` | `servicemonitors` | full |
 | `external-secrets.io` | `externalsecrets` | full |
+| `external-secrets.io` | `secretstores` | get, list, watch, create |
+| `traefik.io`, `traefik.containo.us` | `middlewares` | full |
 
 ---
 
@@ -249,3 +273,5 @@ Generated from `// +kubebuilder:rbac:...` markers in `appdefinition_controller.g
 - **Log shipping integration**: when `loggingConfig` is present, inject a Promtail scrape annotation on the pod, or create an OTel `PodLogs` object targeting it — same unstructured pattern as `ServiceMonitor`.
 
 - **KEDA / custom metrics HPA**: current autoscaling supports CPU and memory only. A `ScaledObject` would allow scaling on Prometheus metrics, queue length, or any external signal.
+
+- **Layer 4 IP allow-listing**: `domains[].middlewares.ipWhiteList` covers L7 (HTTP/Ingress) traffic only. A `serviceType: LoadBalancer` Service has no Traefik router in front of it, so restricting raw TCP/UDP connectivity needs a different mechanism — e.g. `spec.loadBalancerSourceRanges` on the Service, or a `MiddlewareTCP`/`IngressRouteTCP` pair for Traefik-fronted TCP services.

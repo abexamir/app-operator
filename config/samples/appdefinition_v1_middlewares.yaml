@@ -1,0 +1,128 @@
+# Demonstrates every domains[].middlewares kind, plus the automatic redirectScheme that
+# tls+redirect_tls chains in ahead of them. Requires a Traefik ingress controller with the
+# Middleware CRD installed (traefik.io/v1alpha1, or the legacy traefik.containo.us/v1alpha1
+# group on older Traefik v2 clusters) — see README.md's "domains[].middlewares" section.
+#
+# basicAuth needs a Secret this operator does not manage:
+#   kubectl create secret generic app-basicauth-users \
+#     --from-literal=users="$(htpasswd -nbB admin 'change-me')"
+apiVersion: appdefinition.abexamir.me/v1
+kind: AppDefinition
+metadata:
+  name: middlewares-demo
+  namespace: default
+spec:
+  containers:
+    - name: httpbin
+      image: kennethreitz/httpbin
+      ports:
+        - name: http
+          containerPort: 80
+          servicePort: 80
+          expose: true
+
+  ingressClass: traefik
+
+  # Each domain below isolates one middleware kind so it's easy to find and test in
+  # isolation. In practice you'd usually combine several on the same domain — see
+  # "fortress.example.com" at the bottom for that.
+  domains:
+    # ipWhiteList: only requests from these source ranges reach the backend; everyone else
+    # gets 403 Forbidden.
+    - name: admin.example.com
+      path: /
+      portName: http
+      tls: false
+      middlewares:
+        ipWhiteList:
+          sourceRange:
+            - 10.0.0.0/8
+          ipStrategy:
+            depth: 1   # trust X-Forwarded-For when Traefik sits behind another proxy/LB
+
+    # basicAuth: gates the domain behind HTTP Basic Authentication.
+    - name: staging.example.com
+      path: /
+      portName: http
+      tls: false
+      middlewares:
+        basicAuth:
+          secretName: app-basicauth-users
+          realm: staging
+
+    # forwardAuth: delegates the allow/deny decision to an external HTTP(S) service — e.g.
+    # traefik-forward-auth in front of an SSO provider. A 2xx response lets the request
+    # through; any other response is returned to the client as-is.
+    - name: sso.example.com
+      path: /
+      portName: http
+      tls: false
+      middlewares:
+        forwardAuth:
+          address: http://forward-auth.auth.svc.cluster.local:4181
+          trustForwardHeader: true
+          authResponseHeaders:
+            - X-Forwarded-User
+
+    # headers: injects response headers and toggles common security headers. forceSTSHeader
+    # is only needed to see Strict-Transport-Security on this plain-HTTP demo domain — a real
+    # TLS domain sends it automatically.
+    - name: hardened.example.com
+      path: /
+      portName: http
+      tls: false
+      middlewares:
+        headers:
+          frameDeny: true
+          contentTypeNosniff: true
+          forceSTSHeader: true
+          stsSeconds: 31536000
+          stsIncludeSubdomains: true
+          customResponseHeaders:
+            X-Robots-Tag: "noindex, nofollow"
+
+    # rateLimit: caps the sustained request rate per client source; bursts beyond the limit
+    # get 429 Too Many Requests.
+    - name: throttled.example.com
+      path: /
+      portName: http
+      tls: false
+      middlewares:
+        rateLimit:
+          average: 100
+          burst: 50
+          period: 1s
+
+    # redirect_tls doesn't need a middlewares block at all: tls+redirect_tls always chains a
+    # redirectScheme middleware first, ahead of anything else on the domain, so plain HTTP
+    # requests get a 308 to https:// before any other middleware runs.
+    - name: secure.example.com
+      path: /
+      portName: http
+      tls: true
+      redirect_tls: true
+      certIssuer: letsencrypt-prod
+
+    # Combining every middleware on one domain — they chain in the fixed order
+    # redirectscheme -> ipWhiteList -> rateLimit -> forwardAuth -> basicAuth -> headers,
+    # regardless of the order they're written here.
+    - name: fortress.example.com
+      path: /
+      portName: http
+      tls: true
+      redirect_tls: true
+      certIssuer: letsencrypt-prod
+      middlewares:
+        ipWhiteList:
+          sourceRange:
+            - 10.0.0.0/8
+        rateLimit:
+          average: 50
+          burst: 20
+        forwardAuth:
+          address: http://forward-auth.auth.svc.cluster.local:4181
+        basicAuth:
+          secretName: app-basicauth-users
+        headers:
+          frameDeny: true
+          contentTypeNosniff: true

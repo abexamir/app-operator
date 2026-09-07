@@ -70,7 +70,8 @@ kubectl delete -f https://raw.githubusercontent.com/abexamir/app-operator/main/d
 | `containers` | `Deployment` |
 | `initContainers` | Init containers on the `Deployment` (no separate resource) |
 | `ports[].expose: true` | `Service` |
-| `domains[]` | `Ingress` |
+| `domains[]` | `Ingress` (one per domain) |
+| `domains[].middlewares` / `domains[].tls`+`redirect_tls` | `Middleware` per configured kind (requires Traefik) |
 | `disk` | `PersistentVolumeClaim` (with `disk.annotations` merged into PVC metadata) |
 | `autoscaling.enabled: true` | `HorizontalPodAutoscaler` |
 | `configMaps[]` | `ConfigMap` per entry (operator-owned) |
@@ -103,8 +104,11 @@ kubectl describe appdefinition my-app   # full Conditions and LastError
 |---|---|
 | `Ready` | `True` when `readyReplicas >= replicas`. Message: `N/N replicas ready`. |
 | `DiskReady` | Present when `disk` is set. `True` when PVC is Bound. Message: `bound (Xgi)` or `bound (Xgi, expanding to Ygi)` while a resize is in progress. |
-| `IngressReady` | Present when `domains` is set. `True` when the ingress controller assigns an IP or hostname. |
+| `IngressReady` | Present when `domains` is set. Each domain gets its own `Ingress`; `True` once every one of them has an assigned IP or hostname. |
 | `HPAActive` | Present when `autoscaling.enabled: true`. `True` when the HPA exists. Message: `scaling N/M replicas (min X, max Y)`. |
+| `ExternalSecretsReady` | Present when `externalSecrets` is set. `True` once every `ExternalSecret` resource is created. `CRDUnavailable` if External Secrets Operator isn't installed. |
+| `MonitoringReady` | Present when any port has `metrics.enabled: true`. `True` once the `ServiceMonitor` is created. `CRDUnavailable` if prometheus-operator isn't installed. |
+| `MiddlewaresReady` | Present when any domain sets `middlewares` or `tls`+`redirect_tls`. `True` once every `Middleware` resource is created. `CRDUnavailable` if Traefik's Middleware CRD isn't installed. |
 
 ---
 
@@ -205,14 +209,14 @@ Disabling autoscaling removes the HPA if one exists. Autoscaling cannot be enabl
 
 ### `domains`
 
-Creates an `Ingress`. Each domain gets its own rule; TLS domains each get a TLS block.
+Each domain gets its **own** `Ingress` object, named `<app>-<sanitized-domain>` — not one shared Ingress with a rule per domain. This is required for `domains[].middlewares` (below): Traefik's `router.middlewares` annotation applies to every rule in an Ingress object, so per-domain middlewares are only possible with one Ingress per domain.
 
 ```yaml
 domains:
   - name: app.example.com
     path: /
     tls: true
-    redirect_tls: true
+    redirect_tls: true                 # HTTP requests get a 308 to https:// — see domains[].middlewares
     certIssuer: letsencrypt-prod      # sets cert-manager.io/cluster-issuer annotation
     portName: http                     # service port to route to (default: "http")
     secretName: my-tls-secret          # TLS secret name; auto-generated as <app>-<domain>-tls if omitted
@@ -222,6 +226,68 @@ domains:
     path: /api
     portName: api
 ```
+
+### `domains[].middlewares`
+
+Requires a **Traefik** ingress controller (`ingressClass: traefik`). Each configured kind renders its own Traefik `Middleware` custom resource — `traefik.io/v1alpha1` on current Traefik v2.10+/v3 clusters, falling back to the legacy `traefik.containo.us/v1alpha1` group on older v2 clusters — and is chained onto that domain's `Ingress` via the `traefik.ingress.kubernetes.io/router.middlewares` annotation. If neither Middleware CRD group is installed, this step is silently skipped, same as `ExternalSecret`/`ServiceMonitor` — the app still works, just without the middleware.
+
+Middlewares always chain in this fixed order, regardless of the order they're written in the spec:
+
+1. **`redirectscheme`** — not a `middlewares` field; automatically inserted whenever `tls: true` and `redirect_tls: true` are set on the domain, ahead of everything below. It's what actually makes `redirect_tls` work — there's no cluster-wide HTTP→HTTPS redirect to rely on.
+2. **`ipWhiteList`** — restrict the domain to an allowed set of source IPs/CIDRs.
+3. **`rateLimit`** — cap the sustained request rate per client source.
+4. **`forwardAuth`** — delegate the allow/deny decision to an external HTTP(S) service.
+5. **`basicAuth`** — gate the domain behind HTTP Basic Authentication.
+6. **`headers`** — inject/override request or response headers; runs last since it only decorates the response rather than gating the request.
+
+```yaml
+domains:
+  - name: admin.example.com
+    path: /
+    tls: false
+    middlewares:
+      # Only these source ranges reach the backend; everyone else gets 403.
+      ipWhiteList:
+        sourceRange:
+          - 10.0.0.0/8
+        ipStrategy:
+          depth: 1              # trust X-Forwarded-For when Traefik sits behind another proxy/LB
+
+      # Caps sustained request rate; bursts beyond the limit get 429.
+      rateLimit:
+        average: 100
+        burst: 50
+        period: 1s
+
+      # Delegates the auth decision to an external service (e.g. traefik-forward-auth + an
+      # SSO provider). A 2xx response lets the request through.
+      forwardAuth:
+        address: http://forward-auth.auth.svc.cluster.local:4181
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-Forwarded-User
+
+      # Gates the domain behind HTTP Basic Auth. secretName references a Secret in the same
+      # namespace (not managed by this operator) with a "users" key in htpasswd format:
+      #   kubectl create secret generic admin-basicauth \
+      #     --from-literal=users="$(htpasswd -nbB admin 'change-me')"
+      basicAuth:
+        secretName: admin-basicauth
+        realm: admin-area
+        removeHeader: true
+
+      # Injects response headers and toggles common security headers. forceSTSHeader sends
+      # Strict-Transport-Security even over plain HTTP (a real TLS domain sends it anyway).
+      headers:
+        frameDeny: true
+        contentTypeNosniff: true
+        forceSTSHeader: true
+        stsSeconds: 31536000
+        customResponseHeaders:
+          X-Robots-Tag: "noindex, nofollow"
+```
+
+See `config/samples/appdefinition_v1_middlewares.yaml` for a full example covering every middleware individually plus one domain combining all of them.
 
 ### `disk`
 
@@ -489,6 +555,7 @@ kubectl apply -f config/samples/appdefinition_v1_web_app.yaml
 | `stateful_app` | Disk with partitions + annotations + setFsGroup, fsGroup, postStart, all five secrets modes (inline files / inline envVars / inline both / secretRef files / secretRef envVars), multiple configMaps |
 | `external_secrets` | ExternalSecrets Operator — ClusterSecretStore, SecretStore, `data` with property + version pinning, `dataFrom` bulk import, `mountPath` file mount, `asEnvVars` injection, init container waiting for ESO sync |
 | `platform_ops` | Multi-container sidecars, TCP service, expose:false metrics port, ServiceMonitor, LoadBalancer, loggingConfig (stdout + stderr + files with multilinePattern) |
+| `middlewares` | Traefik middlewares — `ipWhiteList`, `basicAuth`, `forwardAuth`, `headers`, `rateLimit` each on their own domain, `redirect_tls`'s automatic `redirectScheme`, and one domain combining all of them to show chain ordering |
 
 ---
 
