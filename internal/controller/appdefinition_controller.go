@@ -125,6 +125,9 @@ func (r *AppDefinitionReconciler) reconcileAll(ctx context.Context, appDef *v1.A
 	if err := observeReconcileStep("default_secret_store", func() error { return r.reconcileDefaultSecretStore(ctx, appDef) }); err != nil {
 		return err
 	}
+	if err := observeReconcileStep("per_app_secret_store", func() error { return r.reconcilePerAppSecretStore(ctx, appDef) }); err != nil {
+		return err
+	}
 	if err := observeReconcileStep("external_secrets", func() error { return r.reconcileExternalSecrets(ctx, appDef) }); err != nil {
 		return err
 	}

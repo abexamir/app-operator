@@ -29,6 +29,13 @@ func resolvePreferredGVK(mapper apimeta.RESTMapper, groupKind schema.GroupKind, 
 	return schema.GroupVersionKind{}, lastErr
 }
 
+// implicitStoreKind is what an externalSecrets entry's storeKind defaults to when omitted (see
+// api/v1's ExternalSecretMount.StoreKind doc comment) — shared by every place that needs to
+// resolve an entry's effective kind: reconcile_externalsecrets.go's actual ExternalSecret
+// rendering, and both well-known-store-name detectors (usesDefaultSecretStore,
+// usesPerAppSecretStore) that only match an explicit "SecretStore".
+const implicitStoreKind = "ClusterSecretStore"
+
 func standardLabels(name string) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":       name,

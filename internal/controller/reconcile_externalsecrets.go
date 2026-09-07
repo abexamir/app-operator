@@ -66,7 +66,7 @@ func (r *AppDefinitionReconciler) reconcileExternalSecrets(ctx context.Context, 
 
 		storeKind := es.StoreKind
 		if storeKind == "" {
-			storeKind = "ClusterSecretStore"
+			storeKind = implicitStoreKind
 		}
 		refreshInterval := es.RefreshInterval
 		if refreshInterval == "" {

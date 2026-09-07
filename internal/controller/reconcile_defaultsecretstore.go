@@ -70,7 +70,7 @@ func usesDefaultSecretStore(appDef *v1.AppDefinition) bool {
 	for _, es := range appDef.Spec.ExternalSecrets {
 		storeKind := es.StoreKind
 		if storeKind == "" {
-			storeKind = "ClusterSecretStore"
+			storeKind = implicitStoreKind
 		}
 		if es.Store == defaultSecretStoreName && storeKind == "SecretStore" {
 			return true
