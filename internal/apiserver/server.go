@@ -11,11 +11,13 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type Server struct {
 	client         client.Client
+	clientset      kubernetes.Interface
 	log            logr.Logger
 	router         *chi.Mux
 	accessReviewer AccessReviewer
@@ -27,6 +29,12 @@ type Option func(*Server)
 
 func WithAccessReviewer(reviewer AccessReviewer) Option {
 	return func(s *Server) { s.accessReviewer = reviewer }
+}
+
+// WithClientset supplies the client used to stream pod logs (and, later, exec into pods) —
+// operations controller-runtime's generic CRUD client.Client has no verb for.
+func WithClientset(clientset kubernetes.Interface) Option {
+	return func(s *Server) { s.clientset = clientset }
 }
 
 func WithAllowedOrigins(origins ...string) Option {
@@ -61,8 +69,10 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 		Handler:           s.router,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// No WriteTimeout: it would cap the log stream (?follow=true) at a fixed wall-clock
+		// age. Per-request bounds live at the router level instead — see buildRouter's
+		// CRUD-only middleware.Timeout group.
+		IdleTimeout: 60 * time.Second,
 	}
 
 	go func() {
@@ -84,7 +94,6 @@ func (s *Server) buildRouter() *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestLogger(&middleware.DefaultLogFormatter{Logger: stdLogger{s.log}, NoColor: true}))
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(metricsMiddleware)
 	r.Use(s.corsMiddleware)
 
@@ -97,14 +106,23 @@ func (s *Server) buildRouter() *chi.Mux {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(s.rateLimitAPI)
 		r.Use(s.authenticate)
-		r.With(s.requireAccess("list", false, false)).Get("/appdefinitions", s.listAppDefinitions)
-		r.Route("/namespaces/{namespace}/appdefinitions", func(r chi.Router) {
-			r.With(s.requireAccess("list", true, false)).Get("/", s.listAppDefinitionsInNamespace)
-			r.With(s.requireAccess("create", true, false)).Post("/", s.createAppDefinition)
-			r.With(s.requireAccess("get", true, true)).Get("/{name}", s.getAppDefinition)
-			r.With(s.requireAccess("update", true, true)).Put("/{name}", s.updateAppDefinition)
-			r.With(s.requireAccess("delete", true, true)).Delete("/{name}", s.deleteAppDefinition)
+
+		// Scoped (not global) so it doesn't cut off the logs stream below, which can
+		// legitimately run far longer than a normal CRUD request (?follow=true).
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.Timeout(30 * time.Second))
+			r.With(s.requireAccess("list", false, false)).Get("/appdefinitions", s.listAppDefinitions)
+			r.Route("/namespaces/{namespace}/appdefinitions", func(r chi.Router) {
+				r.With(s.requireAccess("list", true, false)).Get("/", s.listAppDefinitionsInNamespace)
+				r.With(s.requireAccess("create", true, false)).Post("/", s.createAppDefinition)
+				r.With(s.requireAccess("get", true, true)).Get("/{name}", s.getAppDefinition)
+				r.With(s.requireAccess("update", true, true)).Put("/{name}", s.updateAppDefinition)
+				r.With(s.requireAccess("delete", true, true)).Delete("/{name}", s.deleteAppDefinition)
+			})
 		})
+
+		r.With(s.requireAccessSubresource("get", "logs")).
+			Get("/namespaces/{namespace}/appdefinitions/{name}/logs", s.getAppDefinitionLogs)
 	})
 
 	return r

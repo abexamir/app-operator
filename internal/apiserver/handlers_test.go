@@ -10,9 +10,11 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clientsetfake "k8s.io/client-go/kubernetes/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -230,6 +232,74 @@ func TestUpdatePreservesLegacyInlineSecretDataWithoutReturningIt(t *testing.T) {
 	}
 	if stored.Spec.Secrets[0].Data["password"] != "secret" {
 		t.Fatal("legacy inline secret data was not preserved")
+	}
+}
+
+func requestLogs(t *testing.T, server *Server, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	return response
+}
+
+func TestLogsRequireConfiguredClientset(t *testing.T) {
+	existing := validApp("7")
+	server := newTestServer(t, &existing)
+
+	response := requestLogs(t, server, "/api/v1/namespaces/apps/appdefinitions/demo/logs")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected %d, got %d: %s", http.StatusServiceUnavailable, response.Code, response.Body.String())
+	}
+}
+
+func TestLogsReturns404WhenNoPodsMatch(t *testing.T) {
+	existing := validApp("7")
+	server := newTestServer(t, &existing)
+	server.clientset = clientsetfake.NewSimpleClientset()
+
+	response := requestLogs(t, server, "/api/v1/namespaces/apps/appdefinitions/demo/logs")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("expected %d, got %d: %s", http.StatusNotFound, response.Code, response.Body.String())
+	}
+}
+
+func TestLogsRejectsPodOutsideApp(t *testing.T) {
+	existing := validApp("7")
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "unrelated", Namespace: "apps", Labels: podSelectorLabels("other-app"),
+		},
+	}
+	server := newTestServer(t, &existing, pod)
+	server.clientset = clientsetfake.NewSimpleClientset()
+
+	response := requestLogs(t, server, "/api/v1/namespaces/apps/appdefinitions/demo/logs?pod=unrelated")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("expected %d, got %d: %s", http.StatusNotFound, response.Code, response.Body.String())
+	}
+}
+
+func TestLogsStreamsPodOutput(t *testing.T) {
+	existing := validApp("7")
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "demo-abc123", Namespace: "apps", Labels: podSelectorLabels("demo"),
+		},
+	}
+	server := newTestServer(t, &existing, pod)
+	server.clientset = clientsetfake.NewSimpleClientset()
+
+	response := requestLogs(t, server, "/api/v1/namespaces/apps/appdefinitions/demo/logs")
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d: %s", http.StatusOK, response.Code, response.Body.String())
+	}
+	if response.Body.String() != "fake logs" {
+		t.Fatalf("unexpected log body: %s", response.Body.String())
+	}
+	if ct := response.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+		t.Fatalf("unexpected content type: %s", ct)
 	}
 }
 

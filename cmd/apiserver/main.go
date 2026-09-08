@@ -64,6 +64,7 @@ func main() {
 		k8sClient,
 		ctrl.Log.WithName("apiserver"),
 		apiserver.WithAccessReviewer(apiserver.NewKubernetesAccessReviewer(authClient)),
+		apiserver.WithClientset(authClient),
 		apiserver.WithAllowedOrigins(origins...),
 	)
 	setupLog.Info("starting API server", "address", addr)

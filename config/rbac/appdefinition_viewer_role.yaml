@@ -27,3 +27,9 @@ rules:
   - appdefinitions/status
   verbs:
   - get
+- apiGroups:
+  - appdefinition.abexamir.me
+  resources:
+  - appdefinitions/logs
+  verbs:
+  - get

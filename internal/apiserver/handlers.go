@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -15,7 +17,10 @@ import (
 	appdefinitionv1 "github.com/abexamir/app-operator/api/v1"
 )
 
-const maxRequestBodyBytes = 1 << 20 // 1 MiB
+const (
+	maxRequestBodyBytes = 1 << 20 // 1 MiB
+	defaultLogTailLines = 500
+)
 
 func (s *Server) readiness(w http.ResponseWriter, r *http.Request) {
 	list := &appdefinitionv1.AppDefinitionList{}
@@ -55,6 +60,102 @@ func (s *Server) getAppDefinition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, sanitizeAppDefinition(app))
+}
+
+// podSelectorLabels mirrors internal/controller/helpers.go's selectorLabels — the label the
+// controller puts on every pod template it owns for an AppDefinition.
+func podSelectorLabels(name string) map[string]string {
+	return map[string]string{"app.kubernetes.io/name": name}
+}
+
+func (s *Server) getAppDefinitionLogs(w http.ResponseWriter, r *http.Request) {
+	ns := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	if s.clientset == nil {
+		s.writeError(w, http.StatusServiceUnavailable, errors.New("log streaming is not configured"))
+		return
+	}
+
+	app := &appdefinitionv1.AppDefinition{}
+	if err := s.client.Get(r.Context(), client.ObjectKey{Namespace: ns, Name: name}, app); err != nil {
+		s.writeError(w, httpStatusFor(err), err)
+		return
+	}
+
+	pods := &corev1.PodList{}
+	if err := s.client.List(r.Context(), pods, client.InNamespace(ns), client.MatchingLabels(podSelectorLabels(name))); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if len(pods.Items) == 0 {
+		s.writeError(w, http.StatusNotFound, errors.New("no pods found for this app"))
+		return
+	}
+
+	podName := r.URL.Query().Get("pod")
+	if podName == "" {
+		podName = pods.Items[0].Name
+	} else {
+		found := false
+		for _, pod := range pods.Items {
+			if pod.Name == podName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, fmt.Errorf("pod %q does not belong to app %q", podName, name))
+			return
+		}
+	}
+
+	tailLines := int64(defaultLogTailLines)
+	opts := &corev1.PodLogOptions{
+		Container: r.URL.Query().Get("container"),
+		Follow:    r.URL.Query().Get("follow") == "true",
+		Previous:  r.URL.Query().Get("previous") == "true",
+		TailLines: &tailLines,
+	}
+	if raw := r.URL.Query().Get("tailLines"); raw != "" {
+		tail, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || tail < 0 {
+			s.writeError(w, http.StatusBadRequest, errors.New("tailLines must be a non-negative integer"))
+			return
+		}
+		opts.TailLines = &tail
+	}
+
+	stream, err := s.clientset.CoreV1().Pods(ns).GetLogs(podName, opts).Stream(r.Context())
+	if err != nil {
+		s.writeError(w, httpStatusFor(err), err)
+		return
+	}
+	defer func() { _ = stream.Close() }()
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	flusher, canFlush := w.(http.Flusher)
+
+	buf := make([]byte, 4096)
+	for {
+		n, readErr := stream.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return
+			}
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				s.log.Error(readErr, "error streaming pod logs", "namespace", ns, "pod", podName)
+			}
+			return
+		}
+	}
 }
 
 func (s *Server) createAppDefinition(w http.ResponseWriter, r *http.Request) {

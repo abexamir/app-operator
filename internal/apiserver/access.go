@@ -21,9 +21,10 @@ type AuthenticatedUser struct {
 }
 
 type AccessAttributes struct {
-	Verb      string
-	Namespace string
-	Name      string
+	Verb        string
+	Namespace   string
+	Name        string
+	Subresource string
 }
 
 type AccessReviewer interface {
@@ -69,7 +70,8 @@ func (r *KubernetesAccessReviewer) Authorize(
 			User: user.Name, UID: user.UID, Groups: user.Groups, Extra: extra,
 			ResourceAttributes: &authorizationv1.ResourceAttributes{
 				Group: "appdefinition.abexamir.me", Version: "v1", Resource: "appdefinitions",
-				Verb: attributes.Verb, Namespace: attributes.Namespace, Name: attributes.Name,
+				Subresource: attributes.Subresource,
+				Verb:        attributes.Verb, Namespace: attributes.Namespace, Name: attributes.Name,
 			},
 		},
 	}, metav1.CreateOptions{})
@@ -107,6 +109,17 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 }
 
 func (s *Server) requireAccess(verb string, namespaced, named bool) func(http.Handler) http.Handler {
+	return s.requireAccessFor(verb, "", namespaced, named)
+}
+
+// requireAccessSubresource gates a route on a pseudo-subresource of appdefinitions (e.g.
+// "logs") that has no native CRD subresource behind it — it exists purely as an RBAC
+// resource string, mirroring how Kubernetes itself scopes "pods/log" separately from "pods".
+func (s *Server) requireAccessSubresource(verb, subresource string) func(http.Handler) http.Handler {
+	return s.requireAccessFor(verb, subresource, true, true)
+}
+
+func (s *Server) requireAccessFor(verb, subresource string, namespaced, named bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := r.Context().Value(userContextKey{}).(AuthenticatedUser)
@@ -114,7 +127,7 @@ func (s *Server) requireAccess(verb string, namespaced, named bool) func(http.Ha
 				s.writeError(w, http.StatusUnauthorized, errors.New("authenticated user missing"))
 				return
 			}
-			attributes := AccessAttributes{Verb: verb}
+			attributes := AccessAttributes{Verb: verb, Subresource: subresource}
 			if namespaced {
 				attributes.Namespace = chi.URLParam(r, "namespace")
 			}

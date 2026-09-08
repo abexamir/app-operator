@@ -116,6 +116,9 @@ Routes:
 - `GET /api/v1/appdefinitions` (all namespaces)
 - `GET|POST /api/v1/namespaces/{namespace}/appdefinitions`
 - `GET|PUT|DELETE /api/v1/namespaces/{namespace}/appdefinitions/{name}`
+- `GET /api/v1/namespaces/{namespace}/appdefinitions/{name}/logs` (`?pod=&container=&follow=&previous=&tailLines=`)
+
+**Pod logs**: CRDs only support `/status` and `/scale` as real subresources, so `logs` can't be a native CRD subresource — kube-apiserver has no route for it. `getAppDefinitionLogs` (`internal/apiserver/handlers.go`) instead lists pods by the `app.kubernetes.io/name=<appdef>` selector the controller already applies (`internal/controller/helpers.go`'s `selectorLabels`) and streams via a `kubernetes.Interface` clientset's `Pods().GetLogs(...)`—something `client.Client`'s generic CRUD interface has no verb for, hence the separate `WithClientset` server option. Authorization still goes through the same `SubjectAccessReview` path, using `Resource: "appdefinitions", Subresource: "logs"` as a pure RBAC string (SAR doesn't require the pair to correspond to a real API route), matching how Kubernetes itself scopes `pods/log` separately from `pods`. `config/rbac/appdefinition_{viewer,editor,admin}_role.yaml` grant `appdefinitions/logs` get accordingly; the apiserver's own ServiceAccount additionally needs `pods`/`pods/log` RBAC (`config/apiserver/rbac.yaml`) to actually read them. Because a log stream (`?follow=true`) can run far longer than a normal CRUD call, this route sits outside the 30s `middleware.Timeout` group in `buildRouter`, and the server has no `WriteTimeout` (see `server.go`'s `Run`).
 
 ### UI (`ui/src/`)
 
