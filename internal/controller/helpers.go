@@ -89,7 +89,7 @@ func domainIngressName(appName, domain string) string {
 
 // middlewareName names a per-domain, per-kind Traefik Middleware object. kind is one of the
 // suffixes produced by enabledMiddlewareKinds ("ipallow", "ratelimit", "forwardauth",
-// "basicauth", "headers").
+// "basicauth", "headers", "rewrite").
 func middlewareName(appName, domain, kind string) string {
 	return fmt.Sprintf("%s-%s-%s", appName, sanitizeDNS(domain), kind)
 }

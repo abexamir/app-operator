@@ -71,7 +71,7 @@ kubectl delete -f https://raw.githubusercontent.com/abexamir/app-operator/main/d
 | `initContainers` | Init containers on the `Deployment` (no separate resource) |
 | `ports[].expose: true` | `Service` |
 | `domains[]` | `Ingress` (one per domain) |
-| `domains[].middlewares` / `domains[].tls`+`redirect_tls` | `Middleware` per configured kind (requires Traefik) |
+| `domains[].middlewares` (incl. `rewrite`) / `domains[].tls`+`redirect_tls` | `Middleware` per configured kind (requires Traefik) |
 | `disk` | `PersistentVolumeClaim` (with `disk.annotations` merged into PVC metadata) |
 | `autoscaling.enabled: true` | `HorizontalPodAutoscaler` |
 | `configMaps[]` | `ConfigMap` per entry (operator-owned) |
@@ -238,7 +238,8 @@ Middlewares always chain in this fixed order, regardless of the order they're wr
 3. **`rateLimit`** — cap the sustained request rate per client source.
 4. **`forwardAuth`** — delegate the allow/deny decision to an external HTTP(S) service.
 5. **`basicAuth`** — gate the domain behind HTTP Basic Authentication.
-6. **`headers`** — inject/override request or response headers; runs last since it only decorates the response rather than gating the request.
+6. **`headers`** — inject/override request or response headers.
+7. **`rewrite`** — rewrite the request path; runs last of all, so every middleware above evaluates the original incoming path and only the backend sees the rewritten one.
 
 ```yaml
 domains:
@@ -285,6 +286,39 @@ domains:
         stsSeconds: 31536000
         customResponseHeaders:
           X-Robots-Tag: "noindex, nofollow"
+```
+
+`rewrite` sets exactly one of `stripPrefix`, `addPrefix`, or `replacePathRegex` — the CRD rejects a `rewrite` block with none or more than one set:
+
+```yaml
+domains:
+  # A public path prefix that the backend itself doesn't expect, e.g. a gateway fronting an
+  # object-storage bucket at the bucket's own root.
+  - name: cdn.example.com
+    path: /files
+    portName: http
+    middlewares:
+      rewrite:
+        stripPrefix:
+          prefixes: ["/files"]   # "/files/a.jpg" -> "/a.jpg"
+
+  # Remap onto a differently-named backend route/bucket in one step. $1 references the regex's
+  # capture group.
+  - name: cdn.example.com
+    path: /images
+    portName: http
+    middlewares:
+      rewrite:
+        replacePathRegex:
+          regex: "^/images/(.*)"
+          replacement: "/invoiceattachment/$1"
+
+  - name: legacy.example.com
+    path: /
+    portName: http
+    middlewares:
+      rewrite:
+        addPrefix: /v2
 ```
 
 See `config/samples/appdefinition_v1_middlewares.yaml` for a full example covering every middleware individually plus one domain combining all of them.
@@ -555,7 +589,7 @@ kubectl apply -f config/samples/appdefinition_v1_web_app.yaml
 | `stateful_app` | Disk with partitions + annotations + setFsGroup, fsGroup, postStart, all five secrets modes (inline files / inline envVars / inline both / secretRef files / secretRef envVars), multiple configMaps |
 | `external_secrets` | ExternalSecrets Operator — ClusterSecretStore, SecretStore, `data` with property + version pinning, `dataFrom` bulk import, `mountPath` file mount, `asEnvVars` injection, init container waiting for ESO sync |
 | `platform_ops` | Multi-container sidecars, TCP service, expose:false metrics port, ServiceMonitor, LoadBalancer, loggingConfig (stdout + stderr + files with multilinePattern) |
-| `middlewares` | Traefik middlewares — `ipWhiteList`, `basicAuth`, `forwardAuth`, `headers`, `rateLimit` each on their own domain, `redirect_tls`'s automatic `redirectScheme`, and one domain combining all of them to show chain ordering |
+| `middlewares` | Traefik middlewares — `ipWhiteList`, `basicAuth`, `forwardAuth`, `headers`, `rateLimit`, `rewrite` each on their own domain, `redirect_tls`'s automatic `redirectScheme`, and one domain combining all of them to show chain ordering |
 
 ---
 

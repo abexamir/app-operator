@@ -1838,6 +1838,60 @@ spec:
                           required:
                           - average
                           type: object
+                        rewrite:
+                          description: Rewrite rewrites the request path before it
+                            reaches the backend.
+                          properties:
+                            addPrefix:
+                              description: AddPrefix prepends this string to the request
+                                path before forwarding.
+                              maxLength: 1024
+                              minLength: 1
+                              type: string
+                            replacePathRegex:
+                              description: |-
+                                ReplacePathRegex rewrites the request path using a regular expression, e.g. to remap a
+                                gateway path onto a differently-named backend bucket/route in one step.
+                              properties:
+                                regex:
+                                  description: Regex is the pattern matched against
+                                    the request path, e.g. "^/images/(.*)".
+                                  maxLength: 1024
+                                  minLength: 1
+                                  type: string
+                                replacement:
+                                  description: |-
+                                    Replacement is the rewritten path, referencing the regex's capture groups as $1, $2, ...,
+                                    e.g. "/invoiceattachment/$1".
+                                  maxLength: 1024
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - regex
+                              - replacement
+                              type: object
+                            stripPrefix:
+                              description: StripPrefix removes the first matching
+                                prefix from the request path before forwarding.
+                              properties:
+                                prefixes:
+                                  description: |-
+                                    Prefixes lists the path prefixes to strip. The first one that matches the request path is
+                                    removed; e.g. "/files" turns "/files/a.jpg" into "/a.jpg".
+                                  items:
+                                    maxLength: 1024
+                                    type: string
+                                  maxItems: 20
+                                  minItems: 1
+                                  type: array
+                              required:
+                              - prefixes
+                              type: object
+                          type: object
+                          x-kubernetes-validations:
+                          - message: exactly one of stripPrefix, addPrefix, or replacePathRegex
+                              must be set
+                            rule: (has(self.stripPrefix)?1:0)+(has(self.addPrefix)?1:0)+(has(self.replacePathRegex)?1:0)==1
                       type: object
                     name:
                       description: Name is the DNS hostname (e.g. app.example.com).

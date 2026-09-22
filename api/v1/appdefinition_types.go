@@ -334,8 +334,10 @@ type DomainSpec struct {
 // MiddlewaresSpec configures Traefik HTTP middlewares applied to a single domain, chained
 // after a TLS-redirect middleware implied by TLS+RedirectTLS (see enabledMiddlewareKinds in
 // the controller). When more than one field here is set, they chain in a fixed order:
-// IPWhiteList and RateLimit filter cheaply before the two auth mechanisms run, with Headers
-// last since it only decorates the response rather than gating the request.
+// IPWhiteList and RateLimit filter cheaply before the two auth mechanisms run, Headers next
+// since it only decorates the response rather than gating the request, and Rewrite last of
+// all — every earlier middleware evaluates the original incoming path; only the backend sees
+// the rewritten one.
 type MiddlewaresSpec struct {
 	// IPWhiteList restricts this domain to an allowed set of source IPs/CIDRs.
 	IPWhiteList *IPWhiteListSpec `json:"ipWhiteList,omitempty"`
@@ -347,6 +349,8 @@ type MiddlewaresSpec struct {
 	Headers *HeadersSpec `json:"headers,omitempty"`
 	// RateLimit caps the request rate accepted per client source.
 	RateLimit *RateLimitSpec `json:"rateLimit,omitempty"`
+	// Rewrite rewrites the request path before it reaches the backend.
+	Rewrite *RewriteSpec `json:"rewrite,omitempty"`
 }
 
 // IPStrategySpec mirrors Traefik's ipStrategy middleware option for determining the client IP
@@ -436,6 +440,53 @@ type RateLimitSpec struct {
 	Burst int64 `json:"burst,omitempty"`
 	// Period over which Average is measured, e.g. "1s", "1m". Defaults to "1s".
 	Period string `json:"period,omitempty"`
+}
+
+// RewriteSpec rewrites the request path before it forwards to the backend, e.g. to route a
+// public-facing path prefix to a differently-laid-out origin (an API gateway peeling off
+// "/files/" in front of an object-storage bucket, a versioned "/v1/" path an upstream doesn't
+// expect, and so on). Exactly one of StripPrefix, AddPrefix, or ReplacePathRegex must be set.
+//
+// The XValidation rule below counts fields via has() rather than the more obvious
+// has(self.x) && size(self.x) > 0 for AddPrefix — the latter estimates far more expensive at
+// admission time (CEL's structural-schema cost estimator does not use AddPrefix's own
+// MaxLength to bound size(), so it prices the check as if the string were unbounded) and
+// pushed this CRD's total validation cost over the apiserver's per-rule budget. AddPrefix's
+// MinLength=1 below achieves the same "empty string doesn't count as set" guarantee for free.
+// +kubebuilder:validation:XValidation:rule="(has(self.stripPrefix)?1:0)+(has(self.addPrefix)?1:0)+(has(self.replacePathRegex)?1:0)==1",message="exactly one of stripPrefix, addPrefix, or replacePathRegex must be set"
+type RewriteSpec struct {
+	// StripPrefix removes the first matching prefix from the request path before forwarding.
+	StripPrefix *StripPrefixSpec `json:"stripPrefix,omitempty"`
+	// AddPrefix prepends this string to the request path before forwarding.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	AddPrefix string `json:"addPrefix,omitempty"`
+	// ReplacePathRegex rewrites the request path using a regular expression, e.g. to remap a
+	// gateway path onto a differently-named backend bucket/route in one step.
+	ReplacePathRegex *ReplacePathRegexSpec `json:"replacePathRegex,omitempty"`
+}
+
+// StripPrefixSpec removes a path prefix before the request reaches the backend.
+type StripPrefixSpec struct {
+	// Prefixes lists the path prefixes to strip. The first one that matches the request path is
+	// removed; e.g. "/files" turns "/files/a.jpg" into "/a.jpg".
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:items:MaxLength=1024
+	Prefixes []string `json:"prefixes"`
+}
+
+// ReplacePathRegexSpec rewrites the request path by regular expression.
+type ReplacePathRegexSpec struct {
+	// Regex is the pattern matched against the request path, e.g. "^/images/(.*)".
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Regex string `json:"regex"`
+	// Replacement is the rewritten path, referencing the regex's capture groups as $1, $2, ...,
+	// e.g. "/invoiceattachment/$1".
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Replacement string `json:"replacement"`
 }
 
 // LifecycleHook runs an exec action inside the container.

@@ -416,6 +416,80 @@ var _ = Describe("AppDefinition Controller", func() {
 			))
 		})
 
+		It("should chain a rewrite middleware last, after rate limiting and headers", func() {
+			rewriteName := types.NamespacedName{Name: "rewrite-test", Namespace: namespace}
+			app := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: rewriteName.Name, Namespace: namespace},
+				Spec: appdefinitionv1.AppDefinitionSpec{
+					Containers: []appdefinitionv1.ContainerSpec{{
+						Name: "web", Image: "nginx:latest", Ports: []appdefinitionv1.PortSpec{{
+							Name: "http", ContainerPort: 80, ServicePort: 80, Protocol: "TCP", Expose: true,
+						}},
+					}},
+					Domains: []appdefinitionv1.DomainSpec{{
+						Name: "cdn.example.com", Path: "/", PortName: "http",
+						Middlewares: &appdefinitionv1.MiddlewaresSpec{
+							RateLimit: &appdefinitionv1.RateLimitSpec{Average: 100},
+							Headers:   &appdefinitionv1.HeadersSpec{FrameDeny: true},
+							Rewrite: &appdefinitionv1.RewriteSpec{
+								ReplacePathRegex: &appdefinitionv1.ReplacePathRegexSpec{
+									Regex: "^/files/(.*)", Replacement: "/$1",
+								},
+							},
+						},
+					}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, app)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, app) })
+
+			r := newTestReconciler()
+			reconcileTwice(r, rewriteName)
+
+			ingress := &networkingv1.Ingress{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: domainIngressName(rewriteName.Name, "cdn.example.com"), Namespace: namespace,
+			}, ingress)).To(Succeed())
+			Expect(ingress.Annotations["traefik.ingress.kubernetes.io/router.middlewares"]).To(Equal(
+				namespace + "-" + middlewareName(rewriteName.Name, "cdn.example.com", "ratelimit") + "@kubernetescrd," +
+					namespace + "-" + middlewareName(rewriteName.Name, "cdn.example.com", "headers") + "@kubernetescrd," +
+					namespace + "-" + middlewareName(rewriteName.Name, "cdn.example.com", "rewrite") + "@kubernetescrd",
+			))
+		})
+
+		It("should reject a rewrite with none, or more than one, of stripPrefix/addPrefix/replacePathRegex set", func() {
+			base := appdefinitionv1.AppDefinitionSpec{
+				Containers: []appdefinitionv1.ContainerSpec{{
+					Name: "web", Image: "nginx:latest", Ports: []appdefinitionv1.PortSpec{{
+						Name: "http", ContainerPort: 80, ServicePort: 80, Protocol: "TCP", Expose: true,
+					}},
+				}},
+			}
+
+			empty := base.DeepCopy()
+			empty.Domains = []appdefinitionv1.DomainSpec{{
+				Name: "empty-rewrite.example.com", Path: "/", PortName: "http",
+				Middlewares: &appdefinitionv1.MiddlewaresSpec{Rewrite: &appdefinitionv1.RewriteSpec{}},
+			}}
+			Expect(k8sClient.Create(ctx, &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: "rewrite-empty-test", Namespace: namespace},
+				Spec:       *empty,
+			})).NotTo(Succeed())
+
+			both := base.DeepCopy()
+			both.Domains = []appdefinitionv1.DomainSpec{{
+				Name: "both-rewrite.example.com", Path: "/", PortName: "http",
+				Middlewares: &appdefinitionv1.MiddlewaresSpec{Rewrite: &appdefinitionv1.RewriteSpec{
+					AddPrefix:   "/api",
+					StripPrefix: &appdefinitionv1.StripPrefixSpec{Prefixes: []string{"/files"}},
+				}},
+			}}
+			Expect(k8sClient.Create(ctx, &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: "rewrite-both-test", Namespace: namespace},
+				Spec:       *both,
+			})).NotTo(Succeed())
+		})
+
 		It("should prune stale managed resources and conditions while preserving unowned resources", func() {
 			pruneName := types.NamespacedName{Name: "prune-test", Namespace: namespace}
 			app := &appdefinitionv1.AppDefinition{

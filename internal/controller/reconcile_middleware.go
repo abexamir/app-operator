@@ -53,8 +53,10 @@ func resolveMiddlewareAPI(mapper apimeta.RESTMapper) (middlewareAPI, error) {
 // enabledMiddlewareKinds returns the configured middleware kinds for a domain, in the fixed
 // chain order applied via the router.middlewares annotation: RedirectScheme runs first so an
 // insecure request is bounced to HTTPS before spending any cycles on the rest of the chain,
-// then IPWhiteList and RateLimit filter cheaply before the two auth mechanisms run, with
-// Headers last since it only decorates the response rather than gating the request.
+// then IPWhiteList and RateLimit filter cheaply before the two auth mechanisms run, Headers
+// next since it only decorates the response rather than gating the request, and Rewrite last
+// of all so every earlier middleware still sees the original incoming path — only the backend
+// sees the rewritten one.
 //
 // RedirectScheme is driven by DomainSpec.TLS/RedirectTLS directly rather than a
 // MiddlewaresSpec field — it replaces the old nginx.ingress.kubernetes.io/force-ssl-redirect
@@ -84,6 +86,9 @@ func enabledMiddlewareKinds(domain v1.DomainSpec) []string {
 	}
 	if mw.Headers != nil {
 		kinds = append(kinds, "headers")
+	}
+	if mw.Rewrite != nil {
+		kinds = append(kinds, "rewrite")
 	}
 	return kinds
 }
@@ -224,6 +229,8 @@ func buildMiddlewareSpec(kind string, domain v1.DomainSpec, api middlewareAPI) m
 		return buildBasicAuthSpec(mw.BasicAuth)
 	case "headers":
 		return buildHeadersSpec(mw.Headers)
+	case "rewrite":
+		return buildRewriteSpec(mw.Rewrite)
 	default:
 		return nil
 	}
@@ -329,6 +336,34 @@ func buildHeadersSpec(h *v1.HeadersSpec) map[string]interface{} {
 		body["accessControlAllowCredentials"] = true
 	}
 	return map[string]interface{}{"headers": body}
+}
+
+// buildRewriteSpec renders exactly one of Traefik's stripPrefix, addPrefix, or
+// replacePathRegex middleware bodies — RewriteSpec's XValidation rule guarantees exactly one
+// of the three is set, so the zero-value fallthrough to addPrefix below is unreachable in
+// practice, not a silent default.
+func buildRewriteSpec(rw *v1.RewriteSpec) map[string]interface{} {
+	switch {
+	case rw.StripPrefix != nil:
+		return map[string]interface{}{
+			"stripPrefix": map[string]interface{}{
+				"prefixes": toInterfaceSlice(rw.StripPrefix.Prefixes),
+			},
+		}
+	case rw.ReplacePathRegex != nil:
+		return map[string]interface{}{
+			"replacePathRegex": map[string]interface{}{
+				"regex":       rw.ReplacePathRegex.Regex,
+				"replacement": rw.ReplacePathRegex.Replacement,
+			},
+		}
+	default:
+		return map[string]interface{}{
+			"addPrefix": map[string]interface{}{
+				"prefix": rw.AddPrefix,
+			},
+		}
+	}
 }
 
 func toInterfaceSlice(strs []string) []interface{} {

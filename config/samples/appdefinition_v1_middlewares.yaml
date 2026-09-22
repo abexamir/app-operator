@@ -93,6 +93,20 @@ spec:
           burst: 50
           period: 1s
 
+    # rewrite: strips the public-facing "/files" prefix before the request reaches the
+    # backend, e.g. an API gateway fronting an object-storage bucket at its own root.
+    # stripPrefix, addPrefix, and replacePathRegex are mutually exclusive — the CRD rejects a
+    # rewrite block with none or more than one set.
+    - name: cdn.example.com
+      path: /files
+      portName: http
+      tls: false
+      middlewares:
+        rewrite:
+          stripPrefix:
+            prefixes:
+              - /files
+
     # redirect_tls doesn't need a middlewares block at all: tls+redirect_tls always chains a
     # redirectScheme middleware first, ahead of anything else on the domain, so plain HTTP
     # requests get a 308 to https:// before any other middleware runs.
@@ -104,8 +118,9 @@ spec:
       certIssuer: letsencrypt-prod
 
     # Combining every middleware on one domain — they chain in the fixed order
-    # redirectscheme -> ipWhiteList -> rateLimit -> forwardAuth -> basicAuth -> headers,
-    # regardless of the order they're written here.
+    # redirectscheme -> ipWhiteList -> rateLimit -> forwardAuth -> basicAuth -> headers ->
+    # rewrite, regardless of the order they're written here. rewrite runs last of all, so
+    # every middleware above it evaluates the original "/api/..." path.
     - name: fortress.example.com
       path: /
       portName: http
@@ -126,3 +141,5 @@ spec:
         headers:
           frameDeny: true
           contentTypeNosniff: true
+        rewrite:
+          addPrefix: /api
