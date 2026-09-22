@@ -93,19 +93,33 @@ spec:
           burst: 50
           period: 1s
 
-    # rewrite: strips the public-facing "/files" prefix before the request reaches the
-    # backend, e.g. an API gateway fronting an object-storage bucket at its own root.
-    # stripPrefix, addPrefix, and replacePathRegex are mutually exclusive — the CRD rejects a
-    # rewrite block with none or more than one set.
+    # rewrite: two domains sharing one host, each routing a different path prefix to a
+    # differently-laid-out backend. stripPrefix, addPrefix, and replacePathRegex are mutually
+    # exclusive — the CRD rejects a rewrite block with none or more than one set. Same host,
+    # different path -> distinct Ingress + Middleware objects (see README's "domains" section);
+    # same host, same path would collide.
     - name: cdn.example.com
       path: /files
       portName: http
       tls: false
       middlewares:
         rewrite:
+          # An API gateway fronting an object-storage bucket at its own root: strips the
+          # public-facing prefix so "/files/a.jpg" reaches the backend as "/a.jpg".
           stripPrefix:
             prefixes:
               - /files
+    - name: cdn.example.com
+      path: /images
+      portName: http
+      tls: false
+      middlewares:
+        rewrite:
+          # Remaps onto a differently-named backend route/bucket in one step:
+          # "/images/a.jpg" -> "/legacy-uploads/a.jpg". $1 references the regex's capture group.
+          replacePathRegex:
+            regex: ^/images/(.*)
+            replacement: /legacy-uploads/$1
 
     # redirect_tls doesn't need a middlewares block at all: tls+redirect_tls always chains a
     # redirectScheme middleware first, ahead of anything else on the domain, so plain HTTP

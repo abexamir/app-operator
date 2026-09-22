@@ -117,7 +117,7 @@ func (r *AppDefinitionReconciler) reconcileMiddlewares(ctx context.Context, appD
 
 	for _, domain := range appDef.Spec.Domains {
 		for _, kind := range enabledMiddlewareKinds(domain) {
-			name := middlewareName(appDef.Name, domain.Name, kind)
+			name := middlewareName(appDef.Name, domain.Name, domain.Path, kind)
 			desiredNames[name] = struct{}{}
 
 			desired := &unstructured.Unstructured{

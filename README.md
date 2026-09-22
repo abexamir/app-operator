@@ -211,6 +211,8 @@ Disabling autoscaling removes the HPA if one exists. Autoscaling cannot be enabl
 
 Each domain gets its **own** `Ingress` object, named `<app>-<sanitized-domain>` — not one shared Ingress with a rule per domain. This is required for `domains[].middlewares` (below): Traefik's `router.middlewares` annotation applies to every rule in an Ingress object, so per-domain middlewares are only possible with one Ingress per domain.
 
+Two domain entries can share the same `name` (host) as long as they route different `path` prefixes — e.g. a CDN gateway host that strips `/files` to one bucket and remaps `/images` to another via `middlewares.rewrite` (below). The object name then also includes the sanitized path (`<app>-<sanitized-domain>-<sanitized-path>`), so the two don't collide; a domain using the default `path: /` keeps the plain `<app>-<sanitized-domain>` name. Two entries with the **same** host *and* path still collide — only the last one reconciled survives, so don't do that.
+
 ```yaml
 domains:
   - name: app.example.com

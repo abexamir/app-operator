@@ -28,7 +28,7 @@ func (r *AppDefinitionReconciler) reconcileIngress(ctx context.Context, appDef *
 	desiredNames := make(map[string]struct{}, len(appDef.Spec.Domains))
 
 	for _, domain := range appDef.Spec.Domains {
-		name := domainIngressName(appDef.Name, domain.Name)
+		name := domainIngressName(appDef.Name, domain.Name, domain.Path)
 		desiredNames[name] = struct{}{}
 
 		ingress := &networkingv1.Ingress{
@@ -57,7 +57,7 @@ func (r *AppDefinitionReconciler) reconcileIngress(ctx context.Context, appDef *
 			if kinds := enabledMiddlewareKinds(domain); len(kinds) > 0 {
 				refs := make([]string, len(kinds))
 				for i, kind := range kinds {
-					refs[i] = fmt.Sprintf("%s-%s@kubernetescrd", appDef.Namespace, middlewareName(appDef.Name, domain.Name, kind))
+					refs[i] = fmt.Sprintf("%s-%s@kubernetescrd", appDef.Namespace, middlewareName(appDef.Name, domain.Name, domain.Path, kind))
 				}
 				annotations["traefik.ingress.kubernetes.io/router.middlewares"] = strings.Join(refs, ",")
 			}

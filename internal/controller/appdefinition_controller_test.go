@@ -332,14 +332,14 @@ var _ = Describe("AppDefinition Controller", func() {
 
 			protectedIngress := &networkingv1.Ingress{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Name: domainIngressName(mwName.Name, "admin.example.com"), Namespace: namespace,
+				Name: domainIngressName(mwName.Name, "admin.example.com", "/"), Namespace: namespace,
 			}, protectedIngress)).To(Succeed())
 			Expect(protectedIngress.Annotations["traefik.ingress.kubernetes.io/router.middlewares"]).To(
-				Equal(namespace + "-" + middlewareName(mwName.Name, "admin.example.com", "ipallow") + "@kubernetescrd"))
+				Equal(namespace + "-" + middlewareName(mwName.Name, "admin.example.com", "/", "ipallow") + "@kubernetescrd"))
 
 			publicIngress := &networkingv1.Ingress{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Name: domainIngressName(mwName.Name, "public.example.com"), Namespace: namespace,
+				Name: domainIngressName(mwName.Name, "public.example.com", "/"), Namespace: namespace,
 			}, publicIngress)).To(Succeed())
 			Expect(publicIngress.Annotations).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.middlewares"))
 
@@ -374,7 +374,7 @@ var _ = Describe("AppDefinition Controller", func() {
 
 			ingress := &networkingv1.Ingress{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Name: domainIngressName(noTLSName.Name, "no-tls.example.com"), Namespace: namespace,
+				Name: domainIngressName(noTLSName.Name, "no-tls.example.com", "/"), Namespace: namespace,
 			}, ingress)).To(Succeed())
 			Expect(ingress.Annotations).NotTo(HaveKey("cert-manager.io/cluster-issuer"))
 			Expect(ingress.Annotations).NotTo(HaveKey("traefik.ingress.kubernetes.io/router.middlewares"))
@@ -408,11 +408,11 @@ var _ = Describe("AppDefinition Controller", func() {
 
 			ingress := &networkingv1.Ingress{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Name: domainIngressName(redirectName.Name, "secure.example.com"), Namespace: namespace,
+				Name: domainIngressName(redirectName.Name, "secure.example.com", "/"), Namespace: namespace,
 			}, ingress)).To(Succeed())
 			Expect(ingress.Annotations["traefik.ingress.kubernetes.io/router.middlewares"]).To(Equal(
-				namespace + "-" + middlewareName(redirectName.Name, "secure.example.com", "redirectscheme") + "@kubernetescrd," +
-					namespace + "-" + middlewareName(redirectName.Name, "secure.example.com", "ratelimit") + "@kubernetescrd",
+				namespace + "-" + middlewareName(redirectName.Name, "secure.example.com", "/", "redirectscheme") + "@kubernetescrd," +
+					namespace + "-" + middlewareName(redirectName.Name, "secure.example.com", "/", "ratelimit") + "@kubernetescrd",
 			))
 		})
 
@@ -448,12 +448,66 @@ var _ = Describe("AppDefinition Controller", func() {
 
 			ingress := &networkingv1.Ingress{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Name: domainIngressName(rewriteName.Name, "cdn.example.com"), Namespace: namespace,
+				Name: domainIngressName(rewriteName.Name, "cdn.example.com", "/"), Namespace: namespace,
 			}, ingress)).To(Succeed())
 			Expect(ingress.Annotations["traefik.ingress.kubernetes.io/router.middlewares"]).To(Equal(
-				namespace + "-" + middlewareName(rewriteName.Name, "cdn.example.com", "ratelimit") + "@kubernetescrd," +
-					namespace + "-" + middlewareName(rewriteName.Name, "cdn.example.com", "headers") + "@kubernetescrd," +
-					namespace + "-" + middlewareName(rewriteName.Name, "cdn.example.com", "rewrite") + "@kubernetescrd",
+				namespace + "-" + middlewareName(rewriteName.Name, "cdn.example.com", "/", "ratelimit") + "@kubernetescrd," +
+					namespace + "-" + middlewareName(rewriteName.Name, "cdn.example.com", "/", "headers") + "@kubernetescrd," +
+					namespace + "-" + middlewareName(rewriteName.Name, "cdn.example.com", "/", "rewrite") + "@kubernetescrd",
+			))
+		})
+
+		It("should give two domains that share a host but route different path prefixes their own Ingress and rewrite Middleware each", func() {
+			multiPathName := types.NamespacedName{Name: "multipath-test", Namespace: namespace}
+			app := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: multiPathName.Name, Namespace: namespace},
+				Spec: appdefinitionv1.AppDefinitionSpec{
+					Containers: []appdefinitionv1.ContainerSpec{{
+						Name: "web", Image: "nginx:latest", Ports: []appdefinitionv1.PortSpec{{
+							Name: "http", ContainerPort: 80, ServicePort: 80, Protocol: "TCP", Expose: true,
+						}},
+					}},
+					Domains: []appdefinitionv1.DomainSpec{
+						{
+							Name: "cdn.example.com", Path: "/files", PortName: "http",
+							Middlewares: &appdefinitionv1.MiddlewaresSpec{Rewrite: &appdefinitionv1.RewriteSpec{
+								StripPrefix: &appdefinitionv1.StripPrefixSpec{Prefixes: []string{"/files"}},
+							}},
+						},
+						{
+							Name: "cdn.example.com", Path: "/images", PortName: "http",
+							Middlewares: &appdefinitionv1.MiddlewaresSpec{Rewrite: &appdefinitionv1.RewriteSpec{
+								ReplacePathRegex: &appdefinitionv1.ReplacePathRegexSpec{
+									Regex: "^/images/(.*)", Replacement: "/invoiceattachment/$1",
+								},
+							}},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, app)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, app) })
+
+			r := newTestReconciler()
+			reconcileTwice(r, multiPathName)
+
+			// Distinct Ingress names: same host must not collide and silently discard one path.
+			filesIngressName := domainIngressName(multiPathName.Name, "cdn.example.com", "/files")
+			imagesIngressName := domainIngressName(multiPathName.Name, "cdn.example.com", "/images")
+			Expect(filesIngressName).NotTo(Equal(imagesIngressName))
+
+			filesIngress := &networkingv1.Ingress{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: filesIngressName, Namespace: namespace}, filesIngress)).To(Succeed())
+			Expect(filesIngress.Spec.Rules[0].HTTP.Paths[0].Path).To(Equal("/files"))
+			Expect(filesIngress.Annotations["traefik.ingress.kubernetes.io/router.middlewares"]).To(Equal(
+				namespace + "-" + middlewareName(multiPathName.Name, "cdn.example.com", "/files", "rewrite") + "@kubernetescrd",
+			))
+
+			imagesIngress := &networkingv1.Ingress{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: imagesIngressName, Namespace: namespace}, imagesIngress)).To(Succeed())
+			Expect(imagesIngress.Spec.Rules[0].HTTP.Paths[0].Path).To(Equal("/images"))
+			Expect(imagesIngress.Annotations["traefik.ingress.kubernetes.io/router.middlewares"]).To(Equal(
+				namespace + "-" + middlewareName(multiPathName.Name, "cdn.example.com", "/images", "rewrite") + "@kubernetescrd",
 			))
 		})
 
@@ -526,7 +580,7 @@ var _ = Describe("AppDefinition Controller", func() {
 			r := newTestReconciler()
 			reconcileTwice(r, pruneName)
 
-			pruneIngressName := types.NamespacedName{Name: domainIngressName(pruneName.Name, "prune.example.com"), Namespace: namespace}
+			pruneIngressName := types.NamespacedName{Name: domainIngressName(pruneName.Name, "prune.example.com", "/"), Namespace: namespace}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "prune-test-settings", Namespace: namespace}, &corev1.ConfigMap{})).To(Succeed())
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "prune-test-credentials", Namespace: namespace}, &corev1.Secret{})).To(Succeed())
 			Expect(k8sClient.Get(ctx, pruneIngressName, &networkingv1.Ingress{})).To(Succeed())

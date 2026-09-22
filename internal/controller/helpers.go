@@ -83,15 +83,30 @@ func tlsSecretName(appName, domain string) string {
 // (rather than one shared Ingress with multiple host rules) so that Traefik's
 // router.middlewares annotation — which applies to every rule in an Ingress object, not to a
 // single host within it — can scope a domain's middlewares to that domain alone.
-func domainIngressName(appName, domain string) string {
-	return fmt.Sprintf("%s-%s", appName, sanitizeDNS(domain))
+//
+// path is included in the name — via the same sanitizeDNS used for domain — so that two domain
+// entries sharing a host but routing different path prefixes (e.g. a CDN gateway's "/files" and
+// "/images", each with its own domains[].middlewares.rewrite) get distinct Ingress objects
+// instead of silently colliding on one name and having every entry but the last one discarded.
+// sanitizeDNS("/") and sanitizeDNS("") both collapse to "", so the default single-path-per-host
+// case is unaffected and existing object names are unchanged.
+func domainIngressName(appName, domain, path string) string {
+	name := fmt.Sprintf("%s-%s", appName, sanitizeDNS(domain))
+	if p := sanitizeDNS(path); p != "" {
+		name += "-" + p
+	}
+	return name
 }
 
-// middlewareName names a per-domain, per-kind Traefik Middleware object. kind is one of the
-// suffixes produced by enabledMiddlewareKinds ("ipallow", "ratelimit", "forwardauth",
-// "basicauth", "headers", "rewrite").
-func middlewareName(appName, domain, kind string) string {
-	return fmt.Sprintf("%s-%s-%s", appName, sanitizeDNS(domain), kind)
+// middlewareName names a per-domain, per-path, per-kind Traefik Middleware object. kind is one
+// of the suffixes produced by enabledMiddlewareKinds ("ipallow", "ratelimit", "forwardauth",
+// "basicauth", "headers", "rewrite"). See domainIngressName for why path is included.
+func middlewareName(appName, domain, path, kind string) string {
+	name := fmt.Sprintf("%s-%s", appName, sanitizeDNS(domain))
+	if p := sanitizeDNS(path); p != "" {
+		name += "-" + p
+	}
+	return name + "-" + kind
 }
 
 func sanitizeDNS(s string) string {

@@ -136,7 +136,7 @@ func (r *AppDefinitionReconciler) updateStatusOnce(ctx context.Context, appDef *
 		pending := 0
 		for _, domain := range appDef.Spec.Domains {
 			ingress := &networkingv1.Ingress{}
-			name := types.NamespacedName{Name: domainIngressName(appDef.Name, domain.Name), Namespace: appDef.Namespace}
+			name := types.NamespacedName{Name: domainIngressName(appDef.Name, domain.Name, domain.Path), Namespace: appDef.Namespace}
 			assigned := false
 			if err := r.Get(ctx, name, ingress); err == nil {
 				for _, lb := range ingress.Status.LoadBalancer.Ingress {
@@ -283,12 +283,13 @@ func (r *AppDefinitionReconciler) updateMonitoringStatus(ctx context.Context, ap
 func (r *AppDefinitionReconciler) updateMiddlewaresStatus(ctx context.Context, appDef *v1.AppDefinition, now metav1.Time) {
 	type desiredMiddleware struct {
 		domain string
+		path   string
 		kind   string
 	}
 	var desired []desiredMiddleware
 	for _, domain := range appDef.Spec.Domains {
 		for _, kind := range enabledMiddlewareKinds(domain) {
-			desired = append(desired, desiredMiddleware{domain: domain.Name, kind: kind})
+			desired = append(desired, desiredMiddleware{domain: domain.Name, path: domain.Path, kind: kind})
 		}
 	}
 	if len(desired) == 0 {
@@ -309,7 +310,7 @@ func (r *AppDefinitionReconciler) updateMiddlewaresStatus(ctx context.Context, a
 		for _, dm := range desired {
 			obj := &unstructured.Unstructured{}
 			obj.SetGroupVersionKind(api.gvk)
-			key := types.NamespacedName{Name: middlewareName(appDef.Name, dm.domain, dm.kind), Namespace: appDef.Namespace}
+			key := types.NamespacedName{Name: middlewareName(appDef.Name, dm.domain, dm.path, dm.kind), Namespace: appDef.Namespace}
 			if getErr := r.APIReader.Get(ctx, key, obj); getErr == nil {
 				ready++
 			}
