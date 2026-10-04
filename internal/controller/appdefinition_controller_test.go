@@ -22,12 +22,14 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	appdefinitionv1 "github.com/abexamir/app-operator/api/v1"
@@ -200,6 +202,43 @@ var _ = Describe("AppDefinition Controller", func() {
 			deployment := &appsv1.Deployment{}
 			Expect(k8sClient.Get(ctx, statefulName, deployment)).To(Succeed())
 			Expect(deployment.Spec.Strategy.Type).To(Equal(appsv1.RecreateDeploymentStrategyType))
+		})
+
+		It("should leave the Deployment replica count to the HPA once autoscaling is enabled", func() {
+			hpaName := types.NamespacedName{Name: "hpa-test", Namespace: namespace}
+			app := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: hpaName.Name, Namespace: namespace},
+				Spec:       *minimalSpec.DeepCopy(),
+			}
+			app.Spec.Replicas = ptr.To(int32(2))
+			app.Spec.Autoscaling = &appdefinitionv1.AutoscalingSpec{Enabled: true, MaxReplicas: 5}
+			Expect(k8sClient.Create(ctx, app)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, app) })
+
+			r := newTestReconciler()
+			reconcileTwice(r, hpaName)
+
+			hpa := &autoscalingv2.HorizontalPodAutoscaler{}
+			Expect(k8sClient.Get(ctx, hpaName, hpa)).To(Succeed())
+			Expect(hpa.Spec.MinReplicas).To(Equal(ptr.To(int32(2))), "minReplicas defaults to spec.replicas")
+
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, hpaName, deployment)).To(Succeed())
+			Expect(*deployment.Spec.Replicas).To(Equal(int32(2)), "initial count is seeded from spec.replicas")
+
+			// Simulate the HPA scaling the Deployment up.
+			deployment.Spec.Replicas = ptr.To(int32(4))
+			Expect(k8sClient.Update(ctx, deployment)).To(Succeed())
+
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: hpaName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, hpaName, deployment)).To(Succeed())
+			Expect(*deployment.Spec.Replicas).To(Equal(int32(4)), "reconcile must not undo the HPA's scaling")
+
+			fetched := &appdefinitionv1.AppDefinition{}
+			Expect(k8sClient.Get(ctx, hpaName, fetched)).To(Succeed())
+			Expect(fetched.Status.Replicas).To(Equal(int32(4)))
 		})
 
 		It("should create a Service with exposed ports", func() {

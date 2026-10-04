@@ -44,13 +44,15 @@ func (r *AppDefinitionReconciler) reconcileDeployment(ctx context.Context, appDe
 		}
 		var innerErr error
 		op, innerErr = ctrl.CreateOrUpdate(ctx, r.Client, deployment, func() error {
-			replicas := int32(1)
-			if appDef.Spec.Replicas != nil {
-				replicas = *appDef.Spec.Replicas
-			}
-
 			deployment.Labels = standardLabels(appDef.Name)
-			deployment.Spec.Replicas = &replicas
+			// While an HPA is active it owns the replica count: overwriting it here would
+			// scale the Deployment back to spec.replicas on every reconcile (each HPA scale
+			// event itself triggers one via the Owns watch), so the two would fight. Only
+			// seed the count when the Deployment is first created.
+			if !autoscalingEnabled(appDef) || deployment.CreationTimestamp.IsZero() {
+				replicas := desiredReplicas(appDef)
+				deployment.Spec.Replicas = &replicas
+			}
 			deployment.Spec.Strategy = deploymentStrategy(appDef)
 			// Selector is immutable after creation; only set it on new deployments.
 			if deployment.Spec.Selector == nil {
