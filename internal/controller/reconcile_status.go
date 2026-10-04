@@ -206,7 +206,6 @@ func (r *AppDefinitionReconciler) updateStatusOnce(ctx context.Context, appDef *
 	if err := r.Status().Update(ctx, fresh); err != nil {
 		return fmt.Errorf("failed to update AppDefinition status: %w", err)
 	}
-	recordAppStatus(fresh.Namespace, fresh.Name, ready == metav1.ConditionTrue, fresh.Generation)
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/apimachinery/pkg/types"
 	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
@@ -21,14 +22,6 @@ var (
 		Name: "appoperator_managed_resource_prunes_total",
 		Help: "Total stale managed resources deleted by kind.",
 	}, []string{"kind"})
-	appReady = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "appoperator_app_ready",
-		Help: "Whether an AppDefinition is currently ready (1 ready, 0 not ready).",
-	}, []string{"namespace", "name"})
-	appObservedGeneration = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "appoperator_app_observed_generation",
-		Help: "Latest AppDefinition generation observed by the controller.",
-	}, []string{"namespace", "name"})
 )
 
 func init() {
@@ -36,8 +29,6 @@ func init() {
 		reconcileStepDuration,
 		reconcileStepErrors,
 		managedResourcePrunes,
-		appReady,
-		appObservedGeneration,
 	)
 }
 
@@ -55,16 +46,9 @@ func recordManagedResourcePrune(kind string) {
 	managedResourcePrunes.WithLabelValues(kind).Inc()
 }
 
-func recordAppStatus(namespace, name string, ready bool, observedGeneration int64) {
-	readyValue := 0.0
-	if ready {
-		readyValue = 1
-	}
-	appReady.WithLabelValues(namespace, name).Set(readyValue)
-	appObservedGeneration.WithLabelValues(namespace, name).Set(float64(observedGeneration))
-}
-
-func forgetAppMetrics(namespace, name string) {
-	appReady.DeleteLabelValues(namespace, name)
-	appObservedGeneration.DeleteLabelValues(namespace, name)
+// forgetAppMetrics drops the in-memory reconcile stats of a deleted AppDefinition. Every other
+// per-app metric is read from the cache at scrape time (see app_metrics.go) and disappears
+// with the object.
+func forgetAppMetrics(key types.NamespacedName) {
+	appReconcileStats.forget(key)
 }

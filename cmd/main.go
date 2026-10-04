@@ -26,11 +26,14 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -62,6 +65,8 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var secureMetrics bool
+	var appMetricsLabels, appMetricsAnnotations string
+	var appMetricsResourceUsage bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
@@ -79,6 +84,13 @@ func main() {
 		"The directory that contains the metrics server certificate.")
 	flag.StringVar(&metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
+	flag.StringVar(&appMetricsLabels, "app-metrics-labels-allowlist", "",
+		"Comma-separated AppDefinition label keys to attach as label_<key> to every per-app metric, "+
+			"so apps can be filtered and grouped by them. Use * for all labels; avoid high-cardinality keys.")
+	flag.StringVar(&appMetricsAnnotations, "app-metrics-annotations-allowlist", "",
+		"Comma-separated AppDefinition annotation keys to export on appoperator_app_annotations. Use * for all.")
+	flag.BoolVar(&appMetricsResourceUsage, "app-metrics-resource-usage", true,
+		"Export per-container CPU and memory usage of each app from the metrics.k8s.io API (metrics-server), if served.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	opts := zap.Options{
@@ -185,6 +197,12 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "64cfe9d8.abexamir.me",
+		// The Pod informer backs the per-app pod metrics; see PodCacheByObject.
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.Pod{}: controller.PodCacheByObject(),
+			},
+		},
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -209,6 +227,14 @@ func main() {
 		Recorder:  mgr.GetEventRecorderFor("app-operator"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AppDefinition")
+		os.Exit(1)
+	}
+	if err := controller.SetupAppMetrics(mgr, controller.AppMetricsOptions{
+		LabelAllowlist:      controller.ParseAllowlist(appMetricsLabels),
+		AnnotationAllowlist: controller.ParseAllowlist(appMetricsAnnotations),
+		ResourceUsage:       appMetricsResourceUsage,
+	}); err != nil {
+		setupLog.Error(err, "unable to set up app metrics")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

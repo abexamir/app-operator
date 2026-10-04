@@ -19,13 +19,115 @@ spec:
             summary: App Operator reconciliation step is failing
             description: "The {{ $labels.step }} reconciliation step has failed during the last 10 minutes."
         - alert: AppDefinitionNotReady
-          expr: max_over_time(appoperator_app_ready[10m]) == 0
+          expr: |
+            max_over_time(appoperator_app_ready[10m]) == 0
+            unless on (namespace, name) appoperator_app_status_phase{phase="Paused"} == 1
           for: 10m
           labels:
             severity: warning
           annotations:
             summary: AppDefinition has remained unavailable
             description: "AppDefinition {{ $labels.namespace }}/{{ $labels.name }} has not been ready for at least 10 minutes."
+        - alert: AppDefinitionReconcileFailing
+          expr: appoperator_app_status_phase{phase="Failed"} == 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: AppDefinition reconciliation is failing
+            description: "AppDefinition {{ $labels.namespace }}/{{ $labels.name }} has been in phase Failed for 10 minutes; see status.lastError."
+        - alert: AppDefinitionSpecNotObserved
+          expr: appoperator_app_metadata_generation > appoperator_app_observed_generation
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: AppDefinition spec change has not been reconciled
+            description: "The controller has not processed the latest spec of AppDefinition {{ $labels.namespace }}/{{ $labels.name }} for 15 minutes."
+        - alert: AppDefinitionRolloutStalled
+          expr: appoperator_app_rollout_stalled == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: AppDefinition rollout exceeded its progress deadline
+            description: "The Deployment rollout of {{ $labels.namespace }}/{{ $labels.name }} has stopped making progress."
+        - alert: AppDefinitionReplicasUnavailable
+          expr: appoperator_app_replicas_available < appoperator_app_replicas_desired
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: AppDefinition is running below its desired replica count
+            description: "{{ $labels.namespace }}/{{ $labels.name }} has had fewer available replicas than desired for 15 minutes."
+        - alert: AppDefinitionContainerCrashLooping
+          expr: appoperator_app_container_waiting{reason="CrashLoopBackOff"} > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: AppDefinition container is crash looping
+            description: "Container {{ $labels.container }} of {{ $labels.namespace }}/{{ $labels.name }} is in CrashLoopBackOff ({{ $value }} instances)."
+        - alert: AppDefinitionImagePullFailing
+          expr: appoperator_app_container_waiting{reason=~"ErrImagePull|ImagePullBackOff|InvalidImageName"} > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: AppDefinition container image cannot be pulled
+            description: "Container {{ $labels.container }} of {{ $labels.namespace }}/{{ $labels.name }} is stuck on {{ $labels.reason }}."
+        - alert: AppDefinitionContainerOOMKilled
+          expr: |
+            increase(appoperator_app_container_restarts_total[15m]) > 0
+            and on (namespace, name, container)
+            appoperator_app_container_last_terminated{reason="OOMKilled"} > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: AppDefinition container was OOMKilled
+            description: "Container {{ $labels.container }} of {{ $labels.namespace }}/{{ $labels.name }} restarted after running out of memory; consider raising its memory limit."
+        - alert: AppDefinitionMemoryNearLimit
+          expr: |
+            sum by (namespace, name, container) (appoperator_app_container_memory_working_set_bytes)
+            /
+            (
+              sum by (namespace, name, container) (appoperator_app_container_resource_limits{resource="memory"})
+              * on (namespace, name) group_left
+              sum by (namespace, name) (appoperator_app_pods{phase="Running"})
+            ) > 0.9
+          for: 15m
+          labels:
+            severity: info
+          annotations:
+            summary: AppDefinition container is close to its memory limit
+            description: "Container {{ $labels.container }} of {{ $labels.namespace }}/{{ $labels.name }} is using {{ $value | humanizePercentage }} of its memory limit."
+        - alert: AppDefinitionAutoscalingAtMax
+          expr: |
+            appoperator_app_hpa_current_replicas >= appoperator_app_autoscaling_max_replicas
+            and on (namespace, name)
+            appoperator_app_hpa_condition{condition="ScalingLimited", status="true"} == 1
+          for: 30m
+          labels:
+            severity: info
+          annotations:
+            summary: AppDefinition autoscaling is pinned at maxReplicas
+            description: "{{ $labels.namespace }}/{{ $labels.name }} has been at its HPA maxReplicas for 30 minutes; consider raising autoscaling.maxReplicas."
+        - alert: AppDefinitionDiskNotBound
+          expr: appoperator_app_disk_bound == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: AppDefinition disk is not bound
+            description: "The PVC of {{ $labels.namespace }}/{{ $labels.name }} has not been bound for 15 minutes."
+        - alert: AppOperatorAppMetricsCollectFailing
+          expr: appoperator_app_metrics_collect_success == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: App Operator cannot collect per-app metrics
+            description: The controller has failed to collect AppDefinition metrics for 10 minutes; check the controller logs.
         - alert: AppOperatorAPIServerErrors
           expr: sum(rate(appoperator_apiserver_http_requests_total{status=~"5.."}[5m])) > 0
           for: 5m

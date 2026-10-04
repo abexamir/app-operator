@@ -10,6 +10,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -59,18 +60,26 @@ type AppDefinitionReconciler struct {
 // +kubebuilder:rbac:groups=external-secrets.io,resources=externalsecrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=external-secrets.io,resources=secretstores,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=traefik.io,resources=middlewares,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=metrics.k8s.io,resources=pods,verbs=get;list
 // +kubebuilder:rbac:groups=traefik.containo.us,resources=middlewares,verbs=get;list;watch;create;update;patch;delete
 
 func (r *AppDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
+	started := time.Now()
 	appDef := &v1.AppDefinition{}
 	if err := r.Get(ctx, req.NamespacedName, appDef); err != nil {
-		if client.IgnoreNotFound(err) == nil {
-			forgetAppMetrics(req.Namespace, req.Name)
+		if apierrors.IsNotFound(err) {
+			forgetAppMetrics(req.NamespacedName)
+			return ctrl.Result{}, nil
 		}
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		return ctrl.Result{}, err
 	}
+	result, err := r.reconcileAppDefinition(ctx, appDef)
+	appReconcileStats.observe(req.NamespacedName, started, err)
+	return result, err
+}
+
+func (r *AppDefinitionReconciler) reconcileAppDefinition(ctx context.Context, appDef *v1.AppDefinition) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 
 	// Register finalizer on first encounter.
 	if !controllerutil.ContainsFinalizer(appDef, finalizer) {
