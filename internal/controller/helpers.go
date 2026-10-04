@@ -54,6 +54,30 @@ func pvcName(appName string) string {
 	return appName + "-disk"
 }
 
+// desiredReplicas is the replica count spec.replicas asks for, defaulting to 1. When an HPA is
+// active it is only the starting point; see hpaMinReplicas and reconcileDeployment.
+func desiredReplicas(appDef *v1.AppDefinition) int32 {
+	if appDef.Spec.Replicas != nil {
+		return *appDef.Spec.Replicas
+	}
+	return 1
+}
+
+func autoscalingEnabled(appDef *v1.AppDefinition) bool {
+	return appDef.Spec.Autoscaling != nil && appDef.Spec.Autoscaling.Enabled
+}
+
+// hpaMinReplicas resolves autoscaling.minReplicas, defaulting to spec.replicas (or 1) as
+// documented on AutoscalingSpec.MinReplicas. Only valid once autoscalingEnabled. The spec.replicas fallback is capped at
+// maxReplicas, since the HPA API rejects minReplicas > maxReplicas.
+func hpaMinReplicas(appDef *v1.AppDefinition) int32 {
+	as := appDef.Spec.Autoscaling
+	if as.MinReplicas != nil {
+		return *as.MinReplicas
+	}
+	return min(desiredReplicas(appDef), as.MaxReplicas)
+}
+
 func isStateful(appDef *v1.AppDefinition) bool {
 	return appDef.Spec.Disk != nil
 }

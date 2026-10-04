@@ -63,6 +63,9 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          # Attach these AppDefinition labels as label_<key> to every appoperator_app_* metric
+          # so apps can be filtered and grouped by them (docs/metrics.md). Use "*" for all.
+          # - --app-metrics-labels-allowlist=team,environment
         image: controller:latest
         name: manager
         ports: []

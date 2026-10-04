@@ -1,0 +1,14 @@
+# Optional Grafana dashboard for the per-AppDefinition appoperator_app_* metrics.
+# Renders a ConfigMap labeled for the Grafana dashboard sidecar used by kube-prometheus-stack
+# (grafana.sidecar.dashboards.label: grafana_dashboard). Apply it into the namespace that
+# sidecar watches:
+#   kubectl apply -k config/grafana -n monitoring
+# or import appoperator-apps-dashboard.json through the Grafana UI.
+configMapGenerator:
+  - name: appoperator-apps-dashboard
+    files:
+      - appoperator-apps-dashboard.json
+    options:
+      disableNameSuffixHash: true
+      labels:
+        grafana_dashboard: "1"

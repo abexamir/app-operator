@@ -27,10 +27,7 @@ func (r *AppDefinitionReconciler) updateStatus(ctx context.Context, appDef *v1.A
 }
 
 func (r *AppDefinitionReconciler) updateStatusOnce(ctx context.Context, appDef *v1.AppDefinition, reconcileErr error) error {
-	desiredReplicas := int32(1)
-	if appDef.Spec.Replicas != nil {
-		desiredReplicas = *appDef.Spec.Replicas
-	}
+	desiredReplicas := desiredReplicas(appDef)
 
 	// Fetch deployment to get ready replica count.
 	deployment := &appsv1.Deployment{}
@@ -40,6 +37,10 @@ func (r *AppDefinitionReconciler) updateStatusOnce(ctx context.Context, appDef *
 			return fmt.Errorf("failed to get Deployment for status: %w", err)
 		}
 		deploymentFound = false
+	}
+	// Under an HPA the Deployment's replica count, not spec.replicas, is the target.
+	if deploymentFound && autoscalingEnabled(appDef) && deployment.Spec.Replicas != nil {
+		desiredReplicas = *deployment.Spec.Replicas
 	}
 
 	var readyReplicas int32
@@ -205,7 +206,6 @@ func (r *AppDefinitionReconciler) updateStatusOnce(ctx context.Context, appDef *
 	if err := r.Status().Update(ctx, fresh); err != nil {
 		return fmt.Errorf("failed to update AppDefinition status: %w", err)
 	}
-	recordAppStatus(fresh.Namespace, fresh.Name, ready == metav1.ConditionTrue, fresh.Generation)
 	return nil
 }
 

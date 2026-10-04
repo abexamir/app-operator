@@ -576,6 +576,23 @@ paused: true
 
 ---
 
+## Monitoring
+
+The controller exports per-app Prometheus metrics for every AppDefinition. They cover readiness
+and phase, rollout progress, replicas, pod phases, container restarts, crash-loop and OOM
+reasons, CPU and memory usage against requests and limits, HPA state, disk capacity, and
+reconcile results. Allowlisted AppDefinition labels are attached to every series, so apps can be
+filtered and grouped by team, environment or any other label:
+
+```promql
+appoperator_app_ready{label_team="payments"} == 0
+sum by (label_team) (appoperator_app_container_cpu_usage_cores)
+```
+
+Enable label filtering with `--app-metrics-labels-allowlist=team,environment` on the controller.
+`config/prometheus` adds a ServiceMonitor and alerts, and `config/grafana` adds a dashboard. See
+[docs/metrics.md](docs/metrics.md) for the full metric reference, flags and example queries.
+
 ## Samples
 
 All samples live in `config/samples/`. Apply one:

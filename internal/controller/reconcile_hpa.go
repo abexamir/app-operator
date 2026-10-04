@@ -25,7 +25,7 @@ func (r *AppDefinitionReconciler) reconcileHPA(ctx context.Context, appDef *v1.A
 		},
 	}
 
-	if appDef.Spec.Autoscaling == nil || !appDef.Spec.Autoscaling.Enabled {
+	if !autoscalingEnabled(appDef) {
 		if err := r.Delete(ctx, hpa); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("failed to delete HPA: %w", err)
 		}
@@ -36,13 +36,14 @@ func (r *AppDefinitionReconciler) reconcileHPA(ctx context.Context, appDef *v1.A
 		hpa.Labels = standardLabels(appDef.Name)
 
 		as := appDef.Spec.Autoscaling
+		minReplicas := hpaMinReplicas(appDef)
 		hpa.Spec = autoscalingv2.HorizontalPodAutoscalerSpec{
 			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
 				APIVersion: "apps/v1",
 				Kind:       "Deployment",
 				Name:       appDef.Name,
 			},
-			MinReplicas: as.MinReplicas,
+			MinReplicas: &minReplicas,
 			MaxReplicas: as.MaxReplicas,
 		}
 
