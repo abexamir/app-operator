@@ -2398,6 +2398,62 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
+              secretStore:
+                description: SecretStore provisions a Vault SecretStore for externalSecrets
+                  to read from.
+                properties:
+                  name:
+                    description: Name of the SecretStore.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  scope:
+                    default: Namespace
+                    description: |-
+                      Scope is Namespace or App. Namespace creates a store shared by every AppDefinition in
+                      the namespace, authenticating as a ServiceAccount named after the namespace; it is not
+                      garbage-collected. App creates a store owned by this AppDefinition, authenticating as a
+                      ServiceAccount named after the AppDefinition. Defaults to Namespace.
+                    enum:
+                    - Namespace
+                    - App
+                    type: string
+                  vault:
+                    description: Vault configures the store's Vault provider.
+                    properties:
+                      authMountPath:
+                        default: kubernetes
+                        description: AuthMountPath is the Kubernetes auth method mount.
+                          Defaults to "kubernetes".
+                        type: string
+                      path:
+                        default: secret
+                        description: Path is the KV secrets engine mount. Defaults
+                          to "secret".
+                        type: string
+                      role:
+                        description: Role is the Kubernetes auth role. Defaults to
+                          "<namespace>-<serviceAccount>".
+                        type: string
+                      server:
+                        description: Server is the Vault address, e.g. "https://vault.example.com".
+                        pattern: ^https?://
+                        type: string
+                      version:
+                        default: v2
+                        description: Version is the KV secrets engine version. Defaults
+                          to v2.
+                        enum:
+                        - v1
+                        - v2
+                        type: string
+                    required:
+                    - server
+                    type: object
+                required:
+                - name
+                - vault
+                type: object
               secrets:
                 description: Secrets creates inline or references pre-existing Secrets.
                 items:
@@ -2674,11 +2730,9 @@ spec:
                 description: |-
                   ServiceAccountName sets the pod's ServiceAccount. Defaults to the namespace's
                   "default" ServiceAccount when unset (standard Kubernetes behavior). This is
-                  independent of the default SecretStore's own ServiceAccount (see
-                  externalSecrets and reconcileDefaultSecretStore) — that one is always the
-                  shared, namespace-wide default the External Secrets Operator controller
-                  authenticates to Vault with; this field is for apps whose own pod needs a
-                  distinct identity for other Kubernetes RBAC.
+                  independent of the ServiceAccount spec.secretStore provisions, which the External
+                  Secrets Operator authenticates to Vault with; this field is for apps whose own pod
+                  needs a distinct identity for other Kubernetes RBAC.
                 type: string
               serviceType:
                 description: ServiceType is the Kubernetes Service type. Defaults
