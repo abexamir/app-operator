@@ -6,7 +6,7 @@ metadata:
 spec:
   initContainers:
     - name: migrate
-      image: docker.zarrino.tech/busybox:1.36
+      image: busybox:1.36
       command: ["/bin/sh", "-c", "echo migrate done"]
       env:
         - name: DB_HOST
@@ -18,7 +18,7 @@ spec:
 
   containers:
     - name: web
-      image: docker.zarrino.tech/nginxinc/nginx-unprivileged:alpine
+      image: nginxinc/nginx-unprivileged:alpine
       ports:
         - name: http
           containerPort: 8080

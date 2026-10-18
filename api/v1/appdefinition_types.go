@@ -268,6 +268,45 @@ type ExternalSecretMount struct {
 	DataFrom []ExternalSecretDataFrom `json:"dataFrom,omitempty"`
 }
 
+// SecretStoreSpec provisions a Vault-backed SecretStore (plus the ServiceAccount it
+// authenticates as) that externalSecrets entries reference with storeKind: SecretStore.
+// The operator only creates these objects; it never updates an existing one.
+type SecretStoreSpec struct {
+	// Name of the SecretStore.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+	// Scope is Namespace or App. Namespace creates a store shared by every AppDefinition in
+	// the namespace, authenticating as a ServiceAccount named after the namespace; it is not
+	// garbage-collected. App creates a store owned by this AppDefinition, authenticating as a
+	// ServiceAccount named after the AppDefinition. Defaults to Namespace.
+	// +kubebuilder:default=Namespace
+	// +kubebuilder:validation:Enum=Namespace;App
+	Scope string `json:"scope,omitempty"`
+	// Vault configures the store's Vault provider.
+	Vault VaultSecretStoreSpec `json:"vault"`
+}
+
+// VaultSecretStoreSpec is the Vault provider of a provisioned SecretStore, authenticating
+// with Vault's Kubernetes auth method.
+type VaultSecretStoreSpec struct {
+	// Server is the Vault address, e.g. "https://vault.example.com".
+	// +kubebuilder:validation:Pattern=`^https?://`
+	Server string `json:"server"`
+	// Path is the KV secrets engine mount. Defaults to "secret".
+	// +kubebuilder:default=secret
+	Path string `json:"path,omitempty"`
+	// Version is the KV secrets engine version. Defaults to v2.
+	// +kubebuilder:default=v2
+	// +kubebuilder:validation:Enum=v1;v2
+	Version string `json:"version,omitempty"`
+	// AuthMountPath is the Kubernetes auth method mount. Defaults to "kubernetes".
+	// +kubebuilder:default=kubernetes
+	AuthMountPath string `json:"authMountPath,omitempty"`
+	// Role is the Kubernetes auth role. Defaults to "<namespace>-<serviceAccount>".
+	Role string `json:"role,omitempty"`
+}
+
 // ConfigMapMount embeds a ConfigMap in the AppDefinition. The operator creates and
 // owns "<app>-<name>" and mounts it at MountPath in every container.
 type ConfigMapMount struct {
@@ -529,11 +568,9 @@ type AppDefinitionSpec struct {
 	SecurityContext *corev1.PodSecurityContext `json:"securityContext,omitempty"`
 	// ServiceAccountName sets the pod's ServiceAccount. Defaults to the namespace's
 	// "default" ServiceAccount when unset (standard Kubernetes behavior). This is
-	// independent of the default SecretStore's own ServiceAccount (see
-	// externalSecrets and reconcileDefaultSecretStore) — that one is always the
-	// shared, namespace-wide default the External Secrets Operator controller
-	// authenticates to Vault with; this field is for apps whose own pod needs a
-	// distinct identity for other Kubernetes RBAC.
+	// independent of the ServiceAccount spec.secretStore provisions, which the External
+	// Secrets Operator authenticates to Vault with; this field is for apps whose own pod
+	// needs a distinct identity for other Kubernetes RBAC.
 	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 	// ServiceType is the Kubernetes Service type. Defaults to ClusterIP.
 	ServiceType corev1.ServiceType `json:"serviceType,omitempty"`
@@ -559,6 +596,8 @@ type AppDefinitionSpec struct {
 	Secrets []SecretMount `json:"secrets,omitempty"`
 	// ExternalSecrets creates ExternalSecret resources synced by ESO.
 	ExternalSecrets []ExternalSecretMount `json:"externalSecrets,omitempty"`
+	// SecretStore provisions a Vault SecretStore for externalSecrets to read from.
+	SecretStore *SecretStoreSpec `json:"secretStore,omitempty"`
 }
 
 const (

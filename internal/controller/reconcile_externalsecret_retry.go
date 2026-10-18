@@ -38,26 +38,17 @@ func (r *AppDefinitionReconciler) retryFailedExternalSecrets(ctx context.Context
 	now := time.Now()
 	pending := false
 
-	var storeNames []string
-	if usesDefaultSecretStore(appDef) {
-		storeNames = append(storeNames, defaultSecretStoreName)
-	}
-	if usesPerAppSecretStore(appDef) {
-		storeNames = append(storeNames, perAppSecretStoreName(appDef.Name))
-	}
-	if len(storeNames) > 0 {
+	if store := appDef.Spec.SecretStore; store != nil {
 		gvk, err := resolveSecretStoreGVK(r.RESTMapper())
 		if err != nil && !apimeta.IsNoMatchError(err) {
 			return false, fmt.Errorf("resolving SecretStore API version: %w", err)
 		}
 		if err == nil {
-			for _, name := range storeNames {
-				p, err := r.retryIfNotReady(ctx, gvk, types.NamespacedName{Name: name, Namespace: appDef.Namespace}, now)
-				if err != nil {
-					return false, err
-				}
-				pending = pending || p
+			p, err := r.retryIfNotReady(ctx, gvk, types.NamespacedName{Name: store.Name, Namespace: appDef.Namespace}, now)
+			if err != nil {
+				return false, err
 			}
+			pending = p
 		}
 	}
 

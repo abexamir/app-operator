@@ -25,6 +25,7 @@ import (
 // whose RESTMapper knows the ESO kinds.
 var _ = Describe("ExternalSecret retry", func() {
 	const namespace = "team-a"
+	const storeName = "vault"
 	storeGVK := schema.GroupVersionKind{Group: "external-secrets.io", Version: "v1", Kind: "SecretStore"}
 	esGVK := schema.GroupVersionKind{Group: "external-secrets.io", Version: "v1", Kind: "ExternalSecret"}
 
@@ -43,9 +44,15 @@ var _ = Describe("ExternalSecret retry", func() {
 
 	app := &appdefinitionv1.AppDefinition{
 		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: namespace},
-		Spec: appdefinitionv1.AppDefinitionSpec{ExternalSecrets: []appdefinitionv1.ExternalSecretMount{{
-			Name: "creds", Store: defaultSecretStoreName, StoreKind: "SecretStore",
-		}}},
+		Spec: appdefinitionv1.AppDefinitionSpec{
+			ExternalSecrets: []appdefinitionv1.ExternalSecretMount{{
+				Name: "creds", Store: storeName, StoreKind: "SecretStore",
+			}},
+			SecretStore: &appdefinitionv1.SecretStoreSpec{
+				Name:  storeName,
+				Vault: appdefinitionv1.VaultSecretStoreSpec{Server: "https://vault.example.com"},
+			},
+		},
 	}
 
 	newReconciler := func(objs ...*unstructured.Unstructured) *AppDefinitionReconciler {
@@ -72,47 +79,47 @@ var _ = Describe("ExternalSecret retry", func() {
 
 	It("annotates a not-Ready store and ExternalSecret, then throttles repeat nudges", func() {
 		r := newReconciler(
-			esoObject(storeGVK, defaultSecretStoreName, "False"),
+			esoObject(storeGVK, storeName, "False"),
 			esoObject(esGVK, "web-creds", "False"),
 		)
 		pending, err := r.retryFailedExternalSecrets(context.Background(), app)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pending).To(BeTrue())
-		storeStamp := annotationOf(r, storeGVK, defaultSecretStoreName)
+		storeStamp := annotationOf(r, storeGVK, storeName)
 		Expect(storeStamp).NotTo(BeEmpty())
 		Expect(annotationOf(r, esGVK, "web-creds")).NotTo(BeEmpty())
 
 		pending, err = r.retryFailedExternalSecrets(context.Background(), app)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pending).To(BeTrue())
-		Expect(annotationOf(r, storeGVK, defaultSecretStoreName)).To(Equal(storeStamp))
+		Expect(annotationOf(r, storeGVK, storeName)).To(Equal(storeStamp))
 	})
 
 	It("leaves Ready resources alone and reports nothing pending", func() {
 		r := newReconciler(
-			esoObject(storeGVK, defaultSecretStoreName, "True"),
+			esoObject(storeGVK, storeName, "True"),
 			esoObject(esGVK, "web-creds", "True"),
 		)
 		pending, err := r.retryFailedExternalSecrets(context.Background(), app)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pending).To(BeFalse())
-		Expect(annotationOf(r, storeGVK, defaultSecretStoreName)).To(BeEmpty())
+		Expect(annotationOf(r, storeGVK, storeName)).To(BeEmpty())
 		Expect(annotationOf(r, esGVK, "web-creds")).To(BeEmpty())
 	})
 
 	It("waits for ESO to report status before nudging", func() {
 		r := newReconciler(
-			esoObject(storeGVK, defaultSecretStoreName, ""),
+			esoObject(storeGVK, storeName, ""),
 			esoObject(esGVK, "web-creds", "True"),
 		)
 		pending, err := r.retryFailedExternalSecrets(context.Background(), app)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pending).To(BeTrue())
-		Expect(annotationOf(r, storeGVK, defaultSecretStoreName)).To(BeEmpty())
+		Expect(annotationOf(r, storeGVK, storeName)).To(BeEmpty())
 	})
 
 	It("treats a nudge older than the retry interval as due", func() {
-		obj := esoObject(storeGVK, defaultSecretStoreName, "False")
+		obj := esoObject(storeGVK, storeName, "False")
 		now := time.Now()
 		obj.SetAnnotations(map[string]string{revalidateAnnotation: now.Add(-externalSecretsRetryInterval).UTC().Format(time.RFC3339)})
 		Expect(revalidationDue(obj, now)).To(BeTrue())
@@ -122,8 +129,8 @@ var _ = Describe("ExternalSecret retry", func() {
 
 	Describe("esoDependencyPredicate", func() {
 		It("fires on Ready transitions and deletes, not on status churn or creates", func() {
-			notReady := esoObject(storeGVK, defaultSecretStoreName, "False")
-			ready := esoObject(storeGVK, defaultSecretStoreName, "True")
+			notReady := esoObject(storeGVK, storeName, "False")
+			ready := esoObject(storeGVK, storeName, "True")
 			Expect(esoDependencyPredicate.Update(event.UpdateEvent{ObjectOld: notReady, ObjectNew: ready})).To(BeTrue())
 			Expect(esoDependencyPredicate.Update(event.UpdateEvent{ObjectOld: ready, ObjectNew: ready.DeepCopy()})).To(BeFalse())
 			Expect(esoDependencyPredicate.Delete(event.DeleteEvent{Object: ready})).To(BeTrue())
@@ -132,9 +139,9 @@ var _ = Describe("ExternalSecret retry", func() {
 	})
 
 	Describe("mapSecretStoreDependencyToAppDefinitions", func() {
-		It("maps an owned per-app store to its AppDefinition", func() {
+		It("maps an owned App-scoped store to its AppDefinition", func() {
 			r := newReconciler()
-			store := esoObject(storeGVK, perAppSecretStoreName("web"), "")
+			store := esoObject(storeGVK, "web-vault", "")
 			owner := app.DeepCopy()
 			owner.UID = "uid-1"
 			Expect(ctrl.SetControllerReference(owner, store, r.Scheme)).To(Succeed())
@@ -143,14 +150,14 @@ var _ = Describe("ExternalSecret retry", func() {
 			))
 		})
 
-		It("maps the shared default store and its ServiceAccount to every app using it", func() {
+		It("maps a shared Namespace-scoped store and its ServiceAccount to every app declaring it", func() {
 			r := newReconciler()
 			other := &appdefinitionv1.AppDefinition{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: namespace}}
 			Expect(r.Create(context.Background(), app.DeepCopy())).To(Succeed())
 			Expect(r.Create(context.Background(), other)).To(Succeed())
 			want := reconcile.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: namespace}}
 
-			store := esoObject(storeGVK, defaultSecretStoreName, "")
+			store := esoObject(storeGVK, storeName, "")
 			Expect(r.mapSecretStoreDependencyToAppDefinitions(context.Background(), store)).To(ConsistOf(want))
 
 			sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: namespace, Namespace: namespace}}
@@ -158,6 +165,9 @@ var _ = Describe("ExternalSecret retry", func() {
 
 			unrelated := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: namespace}}
 			Expect(r.mapSecretStoreDependencyToAppDefinitions(context.Background(), unrelated)).To(BeEmpty())
+
+			otherStore := esoObject(storeGVK, "other-store", "")
+			Expect(r.mapSecretStoreDependencyToAppDefinitions(context.Background(), otherStore)).To(BeEmpty())
 		})
 	})
 })

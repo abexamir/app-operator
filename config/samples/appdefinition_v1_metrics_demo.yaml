@@ -8,7 +8,7 @@ spec:
     # Pushgateway: accepts pushed metrics and re-exposes them for Prometheus.
     # Exposes its own process + push metrics at port 9091/metrics.
     - name: pushgateway
-      image: docker.zarrino.tech/prom/pushgateway:v1.9.0
+      image: prom/pushgateway:v1.9.0
       ports:
         - name: push
           containerPort: 9091
@@ -34,7 +34,7 @@ spec:
     # StatsD exporter: translates StatsD protocol to Prometheus format.
     # Exposes its own process metrics at port 9102/metrics.
     - name: statsd
-      image: docker.zarrino.tech/prom/statsd-exporter:v0.28.0
+      image: prom/statsd-exporter:v0.28.0
       ports:
         - name: statsd
           containerPort: 9102

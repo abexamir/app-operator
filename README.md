@@ -467,6 +467,27 @@ externalSecrets:
 
 The resulting Kubernetes Secret is named `<app>-<name>` and is owned by the `ExternalSecret`. ESO manages its lifecycle; the operator does not delete or modify it directly. If ESO is not installed, this step is silently skipped (same pattern as ServiceMonitor).
 
+### `secretStore`
+
+Optional. Provisions a Vault `SecretStore` and the `ServiceAccount` it authenticates as, using Vault's Kubernetes auth method. Reference it from `externalSecrets` with `storeKind: SecretStore`. Without it, `externalSecrets` can reference any existing `SecretStore` or `ClusterSecretStore`.
+
+```yaml
+secretStore:
+  name: vault                         # SecretStore name
+  scope: Namespace                    # Namespace (default) or App
+  vault:
+    server: https://vault.example.com # required
+    path: secret                      # KV mount, default "secret"
+    version: v2                       # v1 or v2, default v2
+    authMountPath: kubernetes         # Kubernetes auth mount, default "kubernetes"
+    role: my-role                     # default "<namespace>-<serviceAccount>"
+```
+
+- `Namespace` scope: shared by every AppDefinition in the namespace that declares it. The ServiceAccount is named after the namespace. Neither object is garbage-collected.
+- `App` scope: owned by this AppDefinition. The ServiceAccount is named after the AppDefinition.
+- Get-or-create only: an existing store or ServiceAccount is never updated. Deleting one triggers recreation.
+- The Vault-side role and policy are not managed by the operator.
+
 ### `imagePullSecrets`
 
 References to pre-existing Secrets for pulling private images.

@@ -6,7 +6,7 @@ metadata:
 spec:
   containers:
     - name: app
-      image: docker.zarrino.tech/busybox:1.36
+      image: busybox:1.36
       command: ["/bin/sh", "-c", "while true; do date >> /data/heartbeat; sleep 30; done"]
       ports:
         - name: http

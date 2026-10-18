@@ -7,7 +7,7 @@ spec:
   containers:
     # Pushgateway: persists pushed metrics to the attached disk.
     - name: pushgateway
-      image: docker.zarrino.tech/prom/pushgateway:v1.9.0
+      image: prom/pushgateway:v1.9.0
       args:
         - --persistence.file=/data/pushgateway.data
         - --persistence.interval=5m
@@ -35,7 +35,7 @@ spec:
 
     # StatsD exporter: second scrape target on a separate port.
     - name: statsd
-      image: docker.zarrino.tech/prom/statsd-exporter:v0.28.0
+      image: prom/statsd-exporter:v0.28.0
       ports:
         - name: statsd
           containerPort: 9102

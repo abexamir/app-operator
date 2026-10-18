@@ -27,8 +27,8 @@ type middlewareAPI struct {
 
 // middlewareAPICandidates is tried in order: traefik.io is the current group (Traefik v2.10+
 // and v3) using the non-deprecated "ipAllowList" field; traefik.containo.us is the legacy
-// group removed in Traefik v3 but still served by older v2 clusters (e.g. zarrino-infra's
-// production cluster), which only understands "ipWhiteList".
+// group removed in Traefik v3 but still served by older v2 clusters, which only understands
+// "ipWhiteList".
 var middlewareAPICandidates = []middlewareAPI{
 	{gvk: schema.GroupVersionKind{Group: "traefik.io", Version: "v1alpha1", Kind: "Middleware"}, ipListKey: "ipAllowList"},
 	{gvk: schema.GroupVersionKind{Group: "traefik.containo.us", Version: "v1alpha1", Kind: "Middleware"}, ipListKey: "ipWhiteList"},

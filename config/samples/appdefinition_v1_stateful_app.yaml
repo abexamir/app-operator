@@ -6,7 +6,7 @@ metadata:
 spec:
   initContainers:
     - name: init-data
-      image: docker.zarrino.tech/busybox:1.36
+      image: busybox:1.36
       command: ["/bin/sh", "-c", "mkdir -p /data /logs"]
       resources:
         requests:
@@ -15,7 +15,7 @@ spec:
 
   containers:
     - name: db
-      image: docker.zarrino.tech/postgres:16
+      image: postgres:16
       env:
         # Tell postgres to use the mounted PVC as its data directory.
         # Without PGDATA, postgres defaults to /var/lib/postgresql/data (inside

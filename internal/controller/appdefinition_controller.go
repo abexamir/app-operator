@@ -138,10 +138,7 @@ func (r *AppDefinitionReconciler) reconcileAll(ctx context.Context, appDef *v1.A
 	if err := observeReconcileStep("secrets", func() error { return r.reconcileSecrets(ctx, appDef) }); err != nil {
 		return false, err
 	}
-	if err := observeReconcileStep("default_secret_store", func() error { return r.reconcileDefaultSecretStore(ctx, appDef) }); err != nil {
-		return false, err
-	}
-	if err := observeReconcileStep("per_app_secret_store", func() error { return r.reconcilePerAppSecretStore(ctx, appDef) }); err != nil {
+	if err := observeReconcileStep("secret_store", func() error { return r.reconcileSecretStore(ctx, appDef) }); err != nil {
 		return false, err
 	}
 	if err := observeReconcileStep("external_secrets", func() error { return r.reconcileExternalSecrets(ctx, appDef) }); err != nil {
@@ -197,8 +194,8 @@ func (r *AppDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// externalSecretHash in reconcile_deployment.go — instead of requiring a manual
 		// restart or waiting on an unrelated trigger.
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(mapManagedSecretToAppDefinition)).
-		// The default-store ServiceAccount isn't owned by any AppDefinition, so this maps
-		// both it and per-app ServiceAccounts back to their AppDefinitions for recreation.
+		// A Namespace-scoped store's ServiceAccount isn't owned by any AppDefinition, so this
+		// maps both it and App-scoped ServiceAccounts back to their AppDefinitions for recreation.
 		Watches(&corev1.ServiceAccount{},
 			handler.EnqueueRequestsFromMapFunc(r.mapSecretStoreDependencyToAppDefinitions),
 			builder.WithPredicates(esoDependencyPredicate))
@@ -248,10 +245,10 @@ var esoDependencyPredicate = predicate.Funcs{
 }
 
 // mapSecretStoreDependencyToAppDefinitions maps a SecretStore, ExternalSecret or ServiceAccount
-// to the AppDefinitions that need it. Per-app stores, their ServiceAccounts and ExternalSecrets
-// are controlled by one AppDefinition. The namespace's default store and its ServiceAccount
-// (named after the namespace) are shared, so every AppDefinition in the namespace that uses the
-// default store is enqueued.
+// to the AppDefinitions that need it. App-scoped stores, their ServiceAccounts and
+// ExternalSecrets are controlled by one AppDefinition. A Namespace-scoped store and its
+// ServiceAccount (named after the namespace) are shared, so every AppDefinition in the namespace
+// that declares it is enqueued.
 func (r *AppDefinitionReconciler) mapSecretStoreDependencyToAppDefinitions(ctx context.Context, obj client.Object) []reconcile.Request {
 	if owner := metav1.GetControllerOf(obj); owner != nil {
 		if owner.Kind == "AppDefinition" && strings.HasPrefix(owner.APIVersion, v1.GroupVersion.Group+"/") {
@@ -260,22 +257,24 @@ func (r *AppDefinitionReconciler) mapSecretStoreDependencyToAppDefinitions(ctx c
 		return nil
 	}
 
-	isDefaultStore := obj.GetObjectKind().GroupVersionKind().Kind == secretStoreGroupKind.Kind &&
-		obj.GetName() == defaultSecretStoreName
+	isStore := obj.GetObjectKind().GroupVersionKind().Kind == secretStoreGroupKind.Kind
 	_, isServiceAccount := obj.(*corev1.ServiceAccount)
-	isDefaultServiceAccount := isServiceAccount && obj.GetName() == obj.GetNamespace()
-	if !isDefaultStore && !isDefaultServiceAccount {
+	if !isStore && (!isServiceAccount || obj.GetName() != obj.GetNamespace()) {
 		return nil
 	}
 
 	apps := &v1.AppDefinitionList{}
 	if err := r.List(ctx, apps, client.InNamespace(obj.GetNamespace())); err != nil {
-		log.FromContext(ctx).Error(err, "listing AppDefinitions for default SecretStore dependency", "namespace", obj.GetNamespace())
+		log.FromContext(ctx).Error(err, "listing AppDefinitions for shared SecretStore dependency", "namespace", obj.GetNamespace())
 		return nil
 	}
 	var requests []reconcile.Request
 	for i := range apps.Items {
-		if usesDefaultSecretStore(&apps.Items[i]) {
+		store := apps.Items[i].Spec.SecretStore
+		if store == nil || secretStoreScope(store) != secretStoreScopeNamespace {
+			continue
+		}
+		if isServiceAccount || store.Name == obj.GetName() {
 			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&apps.Items[i])})
 		}
 	}
