@@ -54,7 +54,7 @@ func resolveMiddlewareAPI(mapper apimeta.RESTMapper) (middlewareAPI, error) {
 // chain order applied via the router.middlewares annotation: RedirectScheme runs first so an
 // insecure request is bounced to HTTPS before spending any cycles on the rest of the chain,
 // then IPWhiteList and RateLimit filter cheaply before the two auth mechanisms run, Headers
-// next since it only decorates the response rather than gating the request, and Rewrite last
+// next since it only decorates the response, then Compress, and Rewrite last
 // of all so every earlier middleware still sees the original incoming path — only the backend
 // sees the rewritten one.
 //
@@ -86,6 +86,9 @@ func enabledMiddlewareKinds(domain v1.DomainSpec) []string {
 	}
 	if mw.Headers != nil {
 		kinds = append(kinds, "headers")
+	}
+	if mw.Compress != nil {
+		kinds = append(kinds, "compress")
 	}
 	if mw.Rewrite != nil {
 		kinds = append(kinds, "rewrite")
@@ -229,11 +232,27 @@ func buildMiddlewareSpec(kind string, domain v1.DomainSpec, api middlewareAPI) m
 		return buildBasicAuthSpec(mw.BasicAuth)
 	case "headers":
 		return buildHeadersSpec(mw.Headers)
+	case "compress":
+		return buildCompressSpec(mw.Compress)
 	case "rewrite":
 		return buildRewriteSpec(mw.Rewrite)
 	default:
 		return nil
 	}
+}
+
+func buildCompressSpec(compress *v1.CompressSpec) map[string]interface{} {
+	body := map[string]interface{}{}
+	if len(compress.ExcludedContentTypes) > 0 {
+		body["excludedContentTypes"] = toInterfaceSlice(compress.ExcludedContentTypes)
+	}
+	if len(compress.IncludedContentTypes) > 0 {
+		body["includedContentTypes"] = toInterfaceSlice(compress.IncludedContentTypes)
+	}
+	if compress.MinResponseBodyBytes != nil {
+		body["minResponseBodyBytes"] = *compress.MinResponseBodyBytes
+	}
+	return map[string]interface{}{"compress": body}
 }
 
 func buildIPAllowListSpec(ipw *v1.IPWhiteListSpec, api middlewareAPI) map[string]interface{} {

@@ -373,7 +373,7 @@ type DomainSpec struct {
 // after a TLS-redirect middleware implied by TLS+RedirectTLS (see enabledMiddlewareKinds in
 // the controller). When more than one field here is set, they chain in a fixed order:
 // IPWhiteList and RateLimit filter cheaply before the two auth mechanisms run, Headers next
-// since it only decorates the response rather than gating the request, and Rewrite last of
+// since it only decorates the response, then Compress, and Rewrite last of
 // all — every earlier middleware evaluates the original incoming path; only the backend sees
 // the rewritten one.
 type MiddlewaresSpec struct {
@@ -387,8 +387,24 @@ type MiddlewaresSpec struct {
 	Headers *HeadersSpec `json:"headers,omitempty"`
 	// RateLimit caps the request rate accepted per client source.
 	RateLimit *RateLimitSpec `json:"rateLimit,omitempty"`
+	// Compress enables response compression. An empty object uses Traefik defaults.
+	Compress *CompressSpec `json:"compress,omitempty"`
 	// Rewrite rewrites the request path before it reaches the backend.
 	Rewrite *RewriteSpec `json:"rewrite,omitempty"`
+}
+
+// CompressSpec configures Traefik response compression. Omitted options retain Traefik defaults.
+// IncludedContentTypes and ExcludedContentTypes are mutually exclusive.
+// +kubebuilder:validation:XValidation:rule="!(has(self.includedContentTypes) && has(self.excludedContentTypes))",message="includedContentTypes and excludedContentTypes are mutually exclusive"
+type CompressSpec struct {
+	// ExcludedContentTypes lists content types that must not be compressed.
+	ExcludedContentTypes []string `json:"excludedContentTypes,omitempty"`
+	// IncludedContentTypes limits compression to these content types.
+	IncludedContentTypes []string `json:"includedContentTypes,omitempty"`
+	// MinResponseBodyBytes is the minimum response size eligible for compression.
+	// Omit to use Traefik's default; a pointer preserves an explicit zero.
+	// +kubebuilder:validation:Minimum=0
+	MinResponseBodyBytes *int64 `json:"minResponseBodyBytes,omitempty"`
 }
 
 // IPStrategySpec mirrors Traefik's ipStrategy middleware option for determining the client IP

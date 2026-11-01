@@ -555,7 +555,7 @@ export function AppForm() {
                       render={({ field }) => <JsonField label="Domain Annotations" value={field.value} onChange={field.onChange} />} />
                     <Controller control={control} name={`domains.${i}.middlewaresJson`}
                       render={({ field }) => <JsonField
-                        label='Traefik Middlewares (e.g. {"ipWhiteList": {"sourceRange": ["10.0.0.0/8"]}, "basicAuth": {"secretName": "..."}, "forwardAuth": {"address": "..."}, "headers": {...}, "rateLimit": {"average": 100}})'
+                        label='Traefik Middlewares (e.g. {"ipWhiteList": {"sourceRange": ["10.0.0.0/8"]}, "basicAuth": {"secretName": "..."}, "forwardAuth": {"address": "..."}, "headers": {...}, "rateLimit": {"average": 100}, "compress": {}})'
                         value={field.value} onChange={field.onChange} />} />
                     <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
                       <Button size="small" color="error" startIcon={<DeleteOutlinedIcon />} onClick={() => removeDomain(i)}>Remove</Button>
