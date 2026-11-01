@@ -71,7 +71,7 @@ kubectl delete -f https://raw.githubusercontent.com/abexamir/app-operator/main/d
 | `initContainers` | Init containers on the `Deployment` (no separate resource) |
 | `ports[].expose: true` | `Service` |
 | `domains[]` | `Ingress` (one per domain) |
-| `domains[].middlewares` (incl. `rewrite`) / `domains[].tls`+`redirect_tls` | `Middleware` per configured kind (requires Traefik) |
+| `domains[].middlewares` (incl. `compress` and `rewrite`) / `domains[].tls`+`redirect_tls` | `Middleware` per configured kind (requires Traefik) |
 | `disk` | `PersistentVolumeClaim` (with `disk.annotations` merged into PVC metadata) |
 | `autoscaling.enabled: true` | `HorizontalPodAutoscaler` |
 | `configMaps[]` | `ConfigMap` per entry (operator-owned) |
@@ -241,7 +241,8 @@ Middlewares always chain in this fixed order, regardless of the order they're wr
 4. **`forwardAuth`** — delegate the allow/deny decision to an external HTTP(S) service.
 5. **`basicAuth`** — gate the domain behind HTTP Basic Authentication.
 6. **`headers`** — inject/override request or response headers.
-7. **`rewrite`** — rewrite the request path; runs last of all, so every middleware above evaluates the original incoming path and only the backend sees the rewritten one.
+7. **`compress`** — compress eligible responses; `{}` uses Traefik defaults. Optional `excludedContentTypes` or `includedContentTypes` (mutually exclusive) filter content types; `minResponseBodyBytes` sets a non-negative size threshold, including explicit zero.
+8. **`rewrite`** — rewrite the request path; runs last of all, so every middleware above evaluates the original incoming path and only the backend sees the rewritten one.
 
 ```yaml
 domains:

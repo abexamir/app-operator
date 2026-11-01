@@ -87,7 +87,14 @@ export interface RateLimitSpec {
   period?: string
 }
 
+export interface CompressSpec {
+  excludedContentTypes?: string[]
+  includedContentTypes?: string[]
+  minResponseBodyBytes?: number
+}
+
 export interface MiddlewaresSpec {
+  compress?: CompressSpec
   ipWhiteList?: IPWhiteListSpec
   basicAuth?: BasicAuthSpec
   forwardAuth?: ForwardAuthSpec

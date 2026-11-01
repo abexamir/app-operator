@@ -93,6 +93,14 @@ spec:
           burst: 50
           period: 1s
 
+    # compress: an empty object enables response compression using Traefik defaults.
+    - name: compressed.example.com
+      path: /
+      portName: http
+      tls: false
+      middlewares:
+        compress: {}
+
     # rewrite: two domains sharing one host, each routing a different path prefix to a
     # differently-laid-out backend. stripPrefix, addPrefix, and replacePathRegex are mutually
     # exclusive — the CRD rejects a rewrite block with none or more than one set. Same host,
@@ -133,7 +141,7 @@ spec:
 
     # Combining every middleware on one domain — they chain in the fixed order
     # redirectscheme -> ipWhiteList -> rateLimit -> forwardAuth -> basicAuth -> headers ->
-    # rewrite, regardless of the order they're written here. rewrite runs last of all, so
+    # compress -> rewrite, regardless of the order they're written here. rewrite runs last of all, so
     # every middleware above it evaluates the original "/api/..." path.
     - name: fortress.example.com
       path: /
@@ -155,5 +163,9 @@ spec:
         headers:
           frameDeny: true
           contentTypeNosniff: true
+        compress:
+          excludedContentTypes:
+            - text/event-stream
+          minResponseBodyBytes: 1024
         rewrite:
           addPrefix: /api
