@@ -1698,6 +1698,34 @@ spec:
                           required:
                           - secretName
                           type: object
+                        compress:
+                          description: Compress enables response compression. An empty
+                            object uses Traefik defaults.
+                          properties:
+                            excludedContentTypes:
+                              description: ExcludedContentTypes lists content types
+                                that must not be compressed.
+                              items:
+                                type: string
+                              type: array
+                            includedContentTypes:
+                              description: IncludedContentTypes limits compression
+                                to these content types.
+                              items:
+                                type: string
+                              type: array
+                            minResponseBodyBytes:
+                              description: |-
+                                MinResponseBodyBytes is the minimum response size eligible for compression.
+                                Omit to use Traefik's default; a pointer preserves an explicit zero.
+                              format: int64
+                              minimum: 0
+                              type: integer
+                          type: object
+                          x-kubernetes-validations:
+                          - message: includedContentTypes and excludedContentTypes
+                              are mutually exclusive
+                            rule: '!(has(self.includedContentTypes) && has(self.excludedContentTypes))'
                         forwardAuth:
                           description: ForwardAuth delegates authentication/authorization
                             to an external HTTP service.
