@@ -93,7 +93,14 @@ export interface CompressSpec {
   minResponseBodyBytes?: number
 }
 
+export interface RedirectSchemeSpec {
+  scheme: string
+  permanent?: boolean
+  port?: string
+}
+
 export interface MiddlewaresSpec {
+  redirectScheme?: RedirectSchemeSpec
   compress?: CompressSpec
   ipWhiteList?: IPWhiteListSpec
   basicAuth?: BasicAuthSpec

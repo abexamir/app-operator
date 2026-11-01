@@ -241,7 +241,7 @@ This lets a domain combine an existing middleware with native compression or aut
 
 Native middlewares always chain in this fixed order, regardless of the order they're written in the spec:
 
-1. **`redirectscheme`** — not a `middlewares` field; automatically inserted whenever `tls: true` and `redirect_tls: true` are set on the domain, ahead of everything below. It's what actually makes `redirect_tls` work — there's no cluster-wide HTTP→HTTPS redirect to rely on.
+1. **`redirectScheme`** — redirects to the configured `scheme` even with `tls: false`. `scheme` is required; optional `permanent` defaults to false and `port` must be a string. An explicit block takes precedence over the automatic permanent HTTPS redirect from `tls: true` plus `redirect_tls: true`. Exactly one redirect middleware is created, first in the native chain.
 2. **`ipWhiteList`** — restrict the domain to an allowed set of source IPs/CIDRs.
 3. **`rateLimit`** — cap the sustained request rate per client source.
 4. **`forwardAuth`** — delegate the allow/deny decision to an external HTTP(S) service.

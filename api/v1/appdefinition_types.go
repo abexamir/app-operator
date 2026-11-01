@@ -349,6 +349,7 @@ type DomainSpec struct {
 	// TLS enables HTTPS for this host using a TLS secret.
 	TLS bool `json:"tls"`
 	// RedirectTLS redirects HTTP to HTTPS when true and TLS is enabled.
+	// An explicit middlewares.redirectScheme takes precedence.
 	RedirectTLS bool `json:"redirect_tls,omitempty"`
 	// CertIssuer is the cert-manager ClusterIssuer or Issuer name for automatic TLS.
 	CertIssuer string `json:"certIssuer,omitempty"`
@@ -369,14 +370,14 @@ type DomainSpec struct {
 	Middlewares *MiddlewaresSpec `json:"middlewares,omitempty"`
 }
 
-// MiddlewaresSpec configures Traefik HTTP middlewares applied to a single domain, chained
-// after a TLS-redirect middleware implied by TLS+RedirectTLS (see enabledMiddlewareKinds in
-// the controller). When more than one field here is set, they chain in a fixed order:
-// IPWhiteList and RateLimit filter cheaply before the two auth mechanisms run, Headers next
-// since it only decorates the response, then Compress, and Rewrite last of
-// all — every earlier middleware evaluates the original incoming path; only the backend sees
-// the rewritten one.
+// MiddlewaresSpec configures native Traefik HTTP middlewares for a domain.
+// Scheme redirection runs first (explicit RedirectScheme overrides TLS+RedirectTLS), then
+// IPWhiteList, RateLimit, ForwardAuth, BasicAuth, Headers, Compress and Rewrite.
+// Rewrite runs last so earlier middleware sees the original request path.
 type MiddlewaresSpec struct {
+	// RedirectScheme redirects to a scheme even when this domain does not terminate TLS.
+	// When set, it overrides the automatic TLS+RedirectTLS redirect.
+	RedirectScheme *RedirectSchemeSpec `json:"redirectScheme,omitempty"`
 	// IPWhiteList restricts this domain to an allowed set of source IPs/CIDRs.
 	IPWhiteList *IPWhiteListSpec `json:"ipWhiteList,omitempty"`
 	// BasicAuth gates this domain behind HTTP Basic Authentication.
@@ -391,6 +392,17 @@ type MiddlewaresSpec struct {
 	Compress *CompressSpec `json:"compress,omitempty"`
 	// Rewrite rewrites the request path before it reaches the backend.
 	Rewrite *RewriteSpec `json:"rewrite,omitempty"`
+}
+
+// RedirectSchemeSpec configures Traefik scheme redirection independently of TLS termination.
+type RedirectSchemeSpec struct {
+	// Scheme is the target URI scheme, for example https.
+	// +kubebuilder:validation:MinLength=1
+	Scheme string `json:"scheme"`
+	// Permanent selects a permanent redirect. Defaults to false.
+	Permanent bool `json:"permanent,omitempty"`
+	// Port is the target port. Omit to use the scheme's default; it must be a string.
+	Port string `json:"port,omitempty"`
 }
 
 // CompressSpec configures Traefik response compression. Omitted options retain Traefik defaults.
