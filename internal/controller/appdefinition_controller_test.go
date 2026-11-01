@@ -416,6 +416,45 @@ var _ = Describe("AppDefinition Controller", func() {
 			))
 		})
 
+		It("should preserve explicit middleware before native compression without accumulating references", func() {
+			namespacedName := types.NamespacedName{Name: "explicit-chain-test", Namespace: namespace}
+			app := &appdefinitionv1.AppDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: namespacedName.Name, Namespace: namespace},
+				Spec:       minimalSpec,
+			}
+			const annotation = "traefik.ingress.kubernetes.io/router.middlewares"
+			app.Spec.IngressAnnotations = map[string]string{annotation: "default-global@kubernetescrd"}
+			generated := namespace + "-" + middlewareName(app.Name, "cdn.example.com", "/", "compress") + "@kubernetescrd"
+			app.Spec.Domains = []appdefinitionv1.DomainSpec{{
+				Name: "cdn.example.com", Path: "/",
+				Annotations: map[string]string{annotation: " default-redirect@kubernetescrd, ,default-redirect@kubernetescrd," + generated},
+				Middlewares: &appdefinitionv1.MiddlewaresSpec{Compress: &appdefinitionv1.CompressSpec{}},
+			}}
+			Expect(k8sClient.Create(ctx, app)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, app) })
+			r := newTestReconciler()
+			reconcileTwice(r, namespacedName)
+			reconcileTwice(r, namespacedName)
+			ingress := &networkingv1.Ingress{}
+			key := types.NamespacedName{Name: domainIngressName(app.Name, "cdn.example.com", "/"), Namespace: namespace}
+			Expect(k8sClient.Get(ctx, key, ingress)).To(Succeed())
+			Expect(ingress.Annotations[annotation]).To(Equal("default-redirect@kubernetescrd," + generated))
+
+			Expect(k8sClient.Get(ctx, namespacedName, app)).To(Succeed())
+			app.Spec.Domains[0].Annotations = nil
+			Expect(k8sClient.Update(ctx, app)).To(Succeed())
+			reconcileTwice(r, namespacedName)
+			Expect(k8sClient.Get(ctx, key, ingress)).To(Succeed())
+			Expect(ingress.Annotations[annotation]).To(Equal("default-global@kubernetescrd," + generated))
+
+			Expect(k8sClient.Get(ctx, namespacedName, app)).To(Succeed())
+			app.Spec.IngressAnnotations = nil
+			Expect(k8sClient.Update(ctx, app)).To(Succeed())
+			reconcileTwice(r, namespacedName)
+			Expect(k8sClient.Get(ctx, key, ingress)).To(Succeed())
+			Expect(ingress.Annotations[annotation]).To(Equal(generated))
+		})
+
 		It("should chain a rewrite middleware last, after rate limiting and headers", func() {
 			rewriteName := types.NamespacedName{Name: "rewrite-test", Namespace: namespace}
 			app := &appdefinitionv1.AppDefinition{

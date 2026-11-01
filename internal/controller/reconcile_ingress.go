@@ -55,9 +55,23 @@ func (r *AppDefinitionReconciler) reconcileIngress(ctx context.Context, appDef *
 				annotations["cert-manager.io/cluster-issuer"] = domain.CertIssuer
 			}
 			if kinds := enabledMiddlewareKinds(domain); len(kinds) > 0 {
-				refs := make([]string, len(kinds))
-				for i, kind := range kinds {
-					refs[i] = fmt.Sprintf("%s-%s@kubernetescrd", appDef.Namespace, middlewareName(appDef.Name, domain.Name, domain.Path, kind))
+				// Explicit references are the outer chain, followed by native middleware.
+				// Start from spec annotations on each reconcile so generated refs do not accumulate.
+				refs := make([]string, 0, len(kinds))
+				seen := make(map[string]bool)
+				for _, ref := range strings.Split(annotations["traefik.ingress.kubernetes.io/router.middlewares"], ",") {
+					ref = strings.TrimSpace(ref)
+					if ref != "" && !seen[ref] {
+						refs = append(refs, ref)
+						seen[ref] = true
+					}
+				}
+				for _, kind := range kinds {
+					ref := fmt.Sprintf("%s-%s@kubernetescrd", appDef.Namespace, middlewareName(appDef.Name, domain.Name, domain.Path, kind))
+					if !seen[ref] {
+						refs = append(refs, ref)
+						seen[ref] = true
+					}
 				}
 				annotations["traefik.ingress.kubernetes.io/router.middlewares"] = strings.Join(refs, ",")
 			}

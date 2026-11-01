@@ -233,7 +233,13 @@ domains:
 
 Requires a **Traefik** ingress controller (`ingressClass: traefik`). Each configured kind renders its own Traefik `Middleware` custom resource — `traefik.io/v1alpha1` on current Traefik v2.10+/v3 clusters, falling back to the legacy `traefik.containo.us/v1alpha1` group on older v2 clusters — and is chained onto that domain's `Ingress` via the `traefik.ingress.kubernetes.io/router.middlewares` annotation. If neither Middleware CRD group is installed, this step is silently skipped, same as `ExternalSecret`/`ServiceMonitor` — the app still works, just without the middleware.
 
-Middlewares always chain in this fixed order, regardless of the order they're written in the spec:
+Explicit references in the domain's `traefik.ingress.kubernetes.io/router.middlewares`
+annotation (or the global `ingressAnnotations` fallback) run before native middleware.
+Domain annotations replace the global annotation for that domain. Duplicate references are
+removed while preserving their first occurrence; reconciliation does not accumulate references.
+This lets a domain combine an existing middleware with native compression or authentication.
+
+Native middlewares always chain in this fixed order, regardless of the order they're written in the spec:
 
 1. **`redirectscheme`** — not a `middlewares` field; automatically inserted whenever `tls: true` and `redirect_tls: true` are set on the domain, ahead of everything below. It's what actually makes `redirect_tls` work — there's no cluster-wide HTTP→HTTPS redirect to rely on.
 2. **`ipWhiteList`** — restrict the domain to an allowed set of source IPs/CIDRs.
