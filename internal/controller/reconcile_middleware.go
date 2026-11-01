@@ -58,17 +58,14 @@ func resolveMiddlewareAPI(mapper apimeta.RESTMapper) (middlewareAPI, error) {
 // of all so every earlier middleware still sees the original incoming path — only the backend
 // sees the rewritten one.
 //
-// RedirectScheme is driven by DomainSpec.TLS/RedirectTLS directly rather than a
-// MiddlewaresSpec field — it replaces the old nginx.ingress.kubernetes.io/force-ssl-redirect
-// annotation reconcile_ingress.go used to set, which Traefik silently ignored (that annotation
-// belongs to the ingress-nginx controller). A Traefik redirectScheme Middleware is the only way
-// to actually get the redirect this cluster's Traefik never does globally.
+// RedirectScheme can be configured explicitly, independently of TLS termination. An explicit
+// MiddlewaresSpec.RedirectScheme overrides the automatic HTTPS redirect from TLS+RedirectTLS.
 func enabledMiddlewareKinds(domain v1.DomainSpec) []string {
 	var kinds []string
-	if domain.TLS && domain.RedirectTLS {
+	mw := domain.Middlewares
+	if (mw != nil && mw.RedirectScheme != nil) || (domain.TLS && domain.RedirectTLS) {
 		kinds = append(kinds, "redirectscheme")
 	}
-	mw := domain.Middlewares
 	if mw == nil {
 		return kinds
 	}
@@ -221,6 +218,9 @@ func buildMiddlewareSpec(kind string, domain v1.DomainSpec, api middlewareAPI) m
 	mw := domain.Middlewares
 	switch kind {
 	case "redirectscheme":
+		if mw != nil && mw.RedirectScheme != nil {
+			return buildRedirectSchemeSpec(mw.RedirectScheme)
+		}
 		return map[string]interface{}{"redirectScheme": map[string]interface{}{"scheme": "https", "permanent": true}}
 	case "ipallow":
 		return buildIPAllowListSpec(mw.IPWhiteList, api)
@@ -239,6 +239,14 @@ func buildMiddlewareSpec(kind string, domain v1.DomainSpec, api middlewareAPI) m
 	default:
 		return nil
 	}
+}
+
+func buildRedirectSchemeSpec(redirect *v1.RedirectSchemeSpec) map[string]interface{} {
+	body := map[string]interface{}{"scheme": redirect.Scheme, "permanent": redirect.Permanent}
+	if redirect.Port != "" {
+		body["port"] = redirect.Port
+	}
+	return map[string]interface{}{"redirectScheme": body}
 }
 
 func buildCompressSpec(compress *v1.CompressSpec) map[string]interface{} {

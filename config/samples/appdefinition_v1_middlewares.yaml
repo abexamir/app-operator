@@ -93,6 +93,17 @@ spec:
           burst: 50
           period: 1s
 
+    # Scheme redirection does not require this host to terminate TLS.
+    - name: redirect-only.example.com
+      path: /
+      portName: http
+      tls: false
+      middlewares:
+        redirectScheme:
+          scheme: https
+          permanent: true
+        compress: {}
+
     # compress: an empty object enables response compression using Traefik defaults.
     - name: compressed.example.com
       path: /

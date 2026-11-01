@@ -130,4 +130,48 @@ func TestCompressionMiddleware(t *testing.T) {
 	g.Expect(apierrors.IsNotFound(c.Get(ctx, middlewareKey, middleware))).To(BeTrue())
 	g.Expect(c.Get(ctx, ingressKey, ingress)).To(Succeed())
 	g.Expect(ingress.Annotations["traefik.ingress.kubernetes.io/router.middlewares"]).NotTo(ContainSubstring("-compress@kubernetescrd"))
+
+	// Explicit scheme redirection works without TLS and is ordered before compression.
+	app.Spec.Domains[0].TLS = false
+	app.Spec.Domains[0].RedirectTLS = false
+	app.Spec.Domains[0].Middlewares = &appdefinitionv1.MiddlewaresSpec{
+		RedirectScheme: &appdefinitionv1.RedirectSchemeSpec{Scheme: "https", Permanent: true},
+		Compress:       &appdefinitionv1.CompressSpec{},
+	}
+	g.Expect(c.Update(ctx, app)).To(Succeed())
+	reconcile()
+	redirect := &unstructured.Unstructured{}
+	redirect.SetGroupVersionKind(middleware.GroupVersionKind())
+	redirectKey := types.NamespacedName{Name: middlewareName(app.Name, app.Spec.Domains[0].Name, "", "redirectscheme"), Namespace: app.Namespace}
+	g.Expect(c.Get(ctx, redirectKey, redirect)).To(Succeed())
+	g.Expect(redirect.Object["spec"]).To(Equal(map[string]interface{}{"redirectScheme": map[string]interface{}{"scheme": "https", "permanent": true}}))
+	g.Expect(metav1.IsControlledBy(redirect, app)).To(BeTrue())
+	g.Expect(c.Get(ctx, ingressKey, ingress)).To(Succeed())
+	g.Expect(ingress.Spec.TLS).To(BeEmpty())
+	g.Expect(ingress.Annotations["traefik.ingress.kubernetes.io/router.middlewares"]).To(Equal(
+		app.Namespace + "-" + redirectKey.Name + "@kubernetescrd," + app.Namespace + "-" + middlewareKey.Name + "@kubernetescrd"))
+
+	// Explicit options override automatic TLS redirection without a second middleware.
+	app.Spec.Domains[0].TLS = true
+	app.Spec.Domains[0].RedirectTLS = true
+	app.Spec.Domains[0].Middlewares.RedirectScheme = &appdefinitionv1.RedirectSchemeSpec{Scheme: "http", Port: "8080"}
+	g.Expect(c.Update(ctx, app)).To(Succeed())
+	reconcile()
+	reconcile()
+	g.Expect(c.Get(ctx, redirectKey, redirect)).To(Succeed())
+	g.Expect(redirect.Object["spec"]).To(Equal(map[string]interface{}{"redirectScheme": map[string]interface{}{"scheme": "http", "permanent": false, "port": "8080"}}))
+	g.Expect(c.Get(ctx, ingressKey, ingress)).To(Succeed())
+	g.Expect(strings.Count(ingress.Annotations["traefik.ingress.kubernetes.io/router.middlewares"], "-redirectscheme@kubernetescrd")).To(Equal(1))
+	invalid = app.DeepCopy()
+	invalid.Spec.Domains[0].Middlewares.RedirectScheme.Scheme = ""
+	g.Expect(apierrors.IsInvalid(c.Update(ctx, invalid))).To(BeTrue())
+
+	// Removing the explicit block prunes it; redirect_tls alone still requires TLS.
+	app.Spec.Domains[0].TLS = false
+	app.Spec.Domains[0].Middlewares.RedirectScheme = nil
+	g.Expect(c.Update(ctx, app)).To(Succeed())
+	reconcile()
+	g.Expect(apierrors.IsNotFound(c.Get(ctx, redirectKey, redirect))).To(BeTrue())
+	g.Expect(c.Get(ctx, ingressKey, ingress)).To(Succeed())
+	g.Expect(ingress.Annotations["traefik.ingress.kubernetes.io/router.middlewares"]).To(Equal(app.Namespace + "-" + middlewareKey.Name + "@kubernetescrd"))
 }
