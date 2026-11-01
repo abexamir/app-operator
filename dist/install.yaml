@@ -1874,6 +1874,27 @@ spec:
                           required:
                           - average
                           type: object
+                        redirectScheme:
+                          description: |-
+                            RedirectScheme redirects to a scheme even when this domain does not terminate TLS.
+                            When set, it overrides the automatic TLS+RedirectTLS redirect.
+                          properties:
+                            permanent:
+                              description: Permanent selects a permanent redirect.
+                                Defaults to false.
+                              type: boolean
+                            port:
+                              description: Port is the target port. Omit to use the
+                                scheme's default; it must be a string.
+                              type: string
+                            scheme:
+                              description: Scheme is the target URI scheme, for example
+                                https.
+                              minLength: 1
+                              type: string
+                          required:
+                          - scheme
+                          type: object
                         rewrite:
                           description: Rewrite rewrites the request path before it
                             reaches the backend.
@@ -1944,8 +1965,9 @@ spec:
                         Defaults to http.
                       type: string
                     redirect_tls:
-                      description: RedirectTLS redirects HTTP to HTTPS when true and
-                        TLS is enabled.
+                      description: |-
+                        RedirectTLS redirects HTTP to HTTPS when true and TLS is enabled.
+                        An explicit middlewares.redirectScheme takes precedence.
                       type: boolean
                     secretName:
                       description: SecretName is the TLS secret for this host. Defaults
